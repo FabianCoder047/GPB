@@ -92,6 +92,17 @@ $role = $user['role'] ?? null;
                 </a>
             <?php endif; ?>
 
+            <?php if ($role === 'agentDouane'): ?>
+                <a href="enregistrement.php"
+                   class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-100">
+                    📄 <span>Nouvel enregistrement </span>
+                </a>
+                <a href="historiques.php"
+                   class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-100">
+                    📄 <span>Historiques & Rapports</span>
+                </a>
+            <?php endif; ?>
+
             <!-- Déconnexion -->
             <a href="../../logout.php"
                class="flex items-center gap-2 px-3 py-2 rounded bg-red-100 text-red-600 hover:bg-red-200">
