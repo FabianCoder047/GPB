@@ -14,6 +14,113 @@ if (!isset($_SESSION['user']) || $_SESSION['user']['role'] !== 'enregistreurSort
     exit();
 }
 
+// Fonction utilitaire
+function safe_html($value) {
+    return htmlspecialchars($value ?? '', ENT_QUOTES, 'UTF-8');
+}
+
+// Fonction pour vérifier si toutes les marchandises d'un chargement ont été pesées
+function checkPesageComplet($conn, $chargement_id) {
+    $result = [
+        'complet' => false,
+        'total_marchandises' => 0,
+        'marchandises_pesees' => 0,
+        'details' => []
+    ];
+    
+    try {
+        // Récupérer toutes les marchandises du chargement
+        $stmt = $conn->prepare("
+            SELECT 
+                mcc.idTypeMarchandise,
+                tm.nom as nom_marchandise
+            FROM marchandise_chargement_camion mcc
+            INNER JOIN type_marchandise tm ON mcc.idTypeMarchandise = tm.id
+            WHERE mcc.idChargement = ?
+        ");
+        $stmt->bind_param("i", $chargement_id);
+        $stmt->execute();
+        $marchandises_result = $stmt->get_result();
+        $marchandises = $marchandises_result->fetch_all(MYSQLI_ASSOC);
+        
+        $result['total_marchandises'] = count($marchandises);
+        
+        if (empty($marchandises)) {
+            $result['complet'] = false;
+            return $result;
+        }
+        
+        // Récupérer les pesages pour ce chargement
+        $stmt = $conn->prepare("
+            SELECT 
+                pcc.idPesageChargement,
+                pcc.date_pesage,
+                mpc.idTypeMarchandise,
+                mpc.poids
+            FROM pesage_chargement_camion pcc
+            LEFT JOIN marchandises_pesage_camion mpc ON pcc.idPesageChargement = mpc.idPesageChargement
+            WHERE pcc.idChargement = ?
+            ORDER BY pcc.date_pesage DESC
+            LIMIT 1
+        ");
+        $stmt->bind_param("i", $chargement_id);
+        $stmt->execute();
+        $pesage_result = $stmt->get_result();
+        
+        // Si aucun pesage n'existe
+        if ($pesage_result->num_rows === 0) {
+            $result['complet'] = false;
+            // Préparer les détails
+            foreach ($marchandises as $march) {
+                $result['details'][] = [
+                    'idTypeMarchandise' => $march['idTypeMarchandise'],
+                    'nom_marchandise' => $march['nom_marchandise'],
+                    'pese' => false,
+                    'poids' => null
+                ];
+            }
+            return $result;
+        }
+        
+        // Récupérer le dernier pesage
+        $pesage_data = [];
+        while ($row = $pesage_result->fetch_assoc()) {
+            if ($row['idTypeMarchandise']) {
+                $pesage_data[$row['idTypeMarchandise']] = [
+                    'poids' => $row['poids'],
+                    'date_pesage' => $row['date_pesage']
+                ];
+            }
+        }
+        
+        // Vérifier chaque marchandise
+        $marchandises_pesees = 0;
+        foreach ($marchandises as $march) {
+            $pese = isset($pesage_data[$march['idTypeMarchandise']]);
+            $result['details'][] = [
+                'idTypeMarchandise' => $march['idTypeMarchandise'],
+                'nom_marchandise' => $march['nom_marchandise'],
+                'pese' => $pese,
+                'poids' => $pese ? $pesage_data[$march['idTypeMarchandise']]['poids'] : null
+            ];
+            
+            if ($pese) {
+                $marchandises_pesees++;
+            }
+        }
+        
+        $result['marchandises_pesees'] = $marchandises_pesees;
+        $result['complet'] = ($marchandises_pesees === $result['total_marchandises']);
+        
+        return $result;
+        
+    } catch (Exception $e) {
+        error_log("Erreur vérification pesage: " . $e->getMessage());
+        $result['complet'] = false;
+        return $result;
+    }
+}
+
 // Initialisation des variables de filtres
 $filters = [
     'type_sortie' => $_GET['type_sortie'] ?? '',
@@ -146,11 +253,89 @@ try {
     $result = $stmt->get_result();
     $sorties = $result->fetch_all(MYSQLI_ASSOC);
     
+    // Récupérer les détails supplémentaires pour chaque sortie
+    foreach ($sorties as &$sortie) {
+        // Récupérer les pesages si chargement
+        if ($sortie['type_sortie'] === 'charge' && !empty($sortie['idChargement'])) {
+            $pesage_status = checkPesageComplet($conn, $sortie['idChargement']);
+            $sortie['pesage_complet'] = $pesage_status['complet'];
+            $sortie['nb_marchandises'] = $pesage_status['total_marchandises'];
+            $sortie['nb_marchandises_pesees'] = $pesage_status['marchandises_pesees'];
+            $sortie['details_pesage'] = $pesage_status['details'];
+        }
+    }
+    unset($sortie);
+    
 } catch (Exception $e) {
     $error = "Erreur lors du chargement des données: " . $e->getMessage();
     $sorties = [];
     $total_items = 0;
     $total_pages = 1;
+}
+
+// Récupérer les marchandises pour chaque chargement et déchargement
+$marchandises_par_chargement = [];
+$marchandises_par_dechargement = [];
+
+try {
+    // Récupérer les IDs de chargements et déchargements
+    $chargement_ids = array_filter(array_column($sorties, 'idChargement'));
+    $dechargement_ids = array_filter(array_column($sorties, 'idDechargement'));
+    
+    // Récupérer les marchandises des chargements
+    if (!empty($chargement_ids)) {
+        $placeholders = str_repeat('?,', count($chargement_ids) - 1) . '?';
+        
+        $stmt_march = $conn->prepare("
+            SELECT 
+                mcc.idChargement,
+                mcc.idTypeMarchandise,
+                tm.nom as nom_marchandise,
+                mcc.note,
+                mcc.date_ajout
+            FROM marchandise_chargement_camion mcc
+            INNER JOIN type_marchandise tm ON mcc.idTypeMarchandise = tm.id
+            WHERE mcc.idChargement IN ($placeholders)
+            ORDER BY mcc.date_ajout
+        ");
+        
+        $stmt_march->bind_param(str_repeat('i', count($chargement_ids)), ...$chargement_ids);
+        $stmt_march->execute();
+        $result_march = $stmt_march->get_result();
+        
+        while ($row = $result_march->fetch_assoc()) {
+            $marchandises_par_chargement[$row['idChargement']][] = $row;
+        }
+    }
+    
+    // Récupérer les marchandises des déchargements
+    if (!empty($dechargement_ids)) {
+        $placeholders = str_repeat('?,', count($dechargement_ids) - 1) . '?';
+        
+        $stmt_march = $conn->prepare("
+            SELECT 
+                mdc.idDechargement,
+                mdc.idTypeMarchandise,
+                tm.nom as nom_marchandise,
+                mdc.note,
+                mdc.date_ajout
+            FROM marchandise_dechargement_camion mdc
+            INNER JOIN type_marchandise tm ON mdc.idTypeMarchandise = tm.id
+            WHERE mdc.idDechargement IN ($placeholders)
+            ORDER BY mdc.date_ajout
+        ");
+        
+        $stmt_march->bind_param(str_repeat('i', count($dechargement_ids)), ...$dechargement_ids);
+        $stmt_march->execute();
+        $result_march = $stmt_march->get_result();
+        
+        while ($row = $result_march->fetch_assoc()) {
+            $marchandises_par_dechargement[$row['idDechargement']][] = $row;
+        }
+    }
+    
+} catch (Exception $e) {
+    error_log("Erreur chargement marchandises: " . $e->getMessage());
 }
 
 // Statistiques
@@ -186,8 +371,94 @@ try {
     <title>Historique et Rapports - Sorties Camions</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .glass-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 0.75rem;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        }
+        
+        .animate-fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .scrollable-section {
+            max-height: calc(100vh - 300px);
+            overflow-y: auto;
+        }
+        
+        .marchandise-item {
+            border-left: 3px solid #3b82f6;
+            background-color: #f8fafc;
+            padding: 12px;
+            margin-bottom: 8px;
+            border-radius: 4px;
+        }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+        
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 0;
+            width: 80%;
+            max-width: 800px;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            animation: modalSlideIn 0.3s ease-out;
+        }
+        
+        @keyframes modalSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-50px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .modal-header {
+            padding: 20px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .modal-body {
+            padding: 20px;
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+        
+        .marchandise-pesee {
+            border-left-color: #10b981;
+        }
+        
+        .marchandise-non-pesee {
+            border-left-color: #ef4444;
+        }
+    </style>
 </head>
-<body class="bg-gray-50">
+<body class="bg-gradient-to-br from-gray-50 to-blue-50 min-h-screen">
     <!-- Navigation -->
     <?php include '../../includes/navbar.php'; ?>
     
@@ -199,7 +470,7 @@ try {
         <?php endif; ?>
         
         <!-- Formulaire de filtres -->
-        <div class="bg-white shadow rounded-lg p-6 mb-6">
+        <div class="glass-card p-6 mb-6">
             <h2 class="text-lg font-bold text-gray-800 mb-4">
                 <i class="fas fa-filter mr-2"></i>Filtres de Recherche
             </h2>
@@ -212,7 +483,7 @@ try {
                             Immatriculation
                         </label>
                         <input type="text" id="immatriculation" name="immatriculation"
-                               value="<?php echo htmlspecialchars($filters['immatriculation']); ?>"
+                               value="<?php echo safe_html($filters['immatriculation']); ?>"
                                class="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                                placeholder="Rechercher...">
                     </div>
@@ -241,7 +512,7 @@ try {
                             <?php foreach ($ports_list as $port): ?>
                                 <option value="<?php echo $port['id']; ?>"
                                     <?php echo $filters['port'] == $port['id'] ? 'selected' : ''; ?>>
-                                    <?php echo htmlspecialchars($port['nom']); ?>
+                                    <?php echo safe_html($port['nom']); ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
@@ -253,7 +524,7 @@ try {
                             Date début
                         </label>
                         <input type="date" id="date_debut" name="date_debut"
-                               value="<?php echo htmlspecialchars($filters['date_debut']); ?>"
+                               value="<?php echo safe_html($filters['date_debut']); ?>"
                                class="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
                     </div>
                     
@@ -263,7 +534,7 @@ try {
                             Date fin
                         </label>
                         <input type="date" id="date_fin" name="date_fin"
-                               value="<?php echo htmlspecialchars($filters['date_fin']); ?>"
+                               value="<?php echo safe_html($filters['date_fin']); ?>"
                                class="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
                     </div>
                     
@@ -308,7 +579,7 @@ try {
         </div>
         
         <!-- Résultats -->
-        <div class="bg-white shadow rounded-lg p-6">
+        <div class="glass-card p-6">
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-lg font-bold text-gray-800">
                     <i class="fas fa-list mr-2"></i>Résultats des Recherches
@@ -349,6 +620,7 @@ try {
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Port</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date Entrée</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type Sortie</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                         </tr>
                     </thead>
                     <tbody class="bg-white divide-y divide-gray-200">
@@ -358,13 +630,13 @@ try {
                                 <?php echo !empty($sortie['date_sortie']) ? date('d/m/Y H:i', strtotime($sortie['date_sortie'])) : 'N/A'; ?>
                             </td>
                             <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
-                                <?php echo htmlspecialchars($sortie['immatriculation']); ?>
+                                <?php echo safe_html($sortie['immatriculation']); ?>
                             </td>
                             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
-                                <?php echo htmlspecialchars($sortie['type_camion'] ?? '-'); ?>
+                                <?php echo safe_html($sortie['type_camion'] ?? '-'); ?>
                             </td>
                             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
-                                <?php echo htmlspecialchars($sortie['port'] ?? '-'); ?>
+                                <?php echo safe_html($sortie['port'] ?? '-'); ?>
                             </td>
                             
                             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
@@ -375,6 +647,13 @@ try {
                                     <?php echo $sortie['type_sortie'] == 'charge' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'; ?>">
                                     <?php echo $sortie['type_sortie'] == 'charge' ? 'Chargé' : 'Déchargé'; ?>
                                 </span>
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm">
+                                <button type="button" 
+                                        onclick="showDetails(<?php echo $sortie['idSortie']; ?>, '<?php echo $sortie['type_sortie']; ?>', <?php echo $sortie['idEntree']; ?>, <?php echo $sortie['idChargement'] ?? 0; ?>, <?php echo $sortie['idDechargement'] ?? 0; ?>)"
+                                        class="bg-blue-500 hover:bg-blue-600 text-white text-xs font-bold py-1 px-3 rounded-lg">
+                                    <i class="fas fa-eye mr-1"></i> Détails
+                                </button>
                             </td>
                         </tr>
                         <?php endforeach; ?>
@@ -472,5 +751,255 @@ try {
             <?php endif; ?>
         </div>
     </div>
+    
+    <!-- Modal pour afficher les détails -->
+    <div id="detailsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle" class="text-lg font-bold text-gray-800"></h3>
+                <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="modalContent"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Données des marchandises (pré-chargées depuis PHP)
+        const marchandisesCharge = <?php echo json_encode($marchandises_par_chargement); ?>;
+        const marchandisesDecharge = <?php echo json_encode($marchandises_par_dechargement); ?>;
+        
+        // Données des sorties (pré-chargées depuis PHP)
+        const sortiesData = <?php echo json_encode($sorties); ?>;
+        
+        // Fonction pour afficher les détails dans une modal
+        function showDetails(sortieId, type, camionId, chargementId, dechargementId) {
+            const sortie = sortiesData.find(s => s.idSortie == sortieId);
+            if (!sortie) return;
+            
+            let marchandises = [];
+            let detailsPesage = [];
+            let titre = '';
+            
+            if (type === 'charge') {
+                marchandises = marchandisesCharge[chargementId] || [];
+                detailsPesage = sortie.details_pesage || [];
+                titre = `Détails du camion ${sortie.immatriculation} (Chargé) - Sorti le ${formatDate(sortie.date_sortie)}`;
+            } else {
+                marchandises = marchandisesDecharge[dechargementId] || [];
+                titre = `Détails du camion ${sortie.immatriculation} (Déchargé) - Sorti le ${formatDate(sortie.date_sortie)}`;
+            }
+            
+            // Construire le contenu HTML
+            let content = `
+                <div class="mb-6">
+                    <div class="grid grid-cols-2 gap-4 mb-4">
+                        <div class="bg-gray-50 p-3 rounded-lg">
+                            <p class="text-xs text-gray-500">Immatriculation</p>
+                            <p class="font-bold">${sortie.immatriculation}</p>
+                        </div>
+                        <div class="bg-gray-50 p-3 rounded-lg">
+                            <p class="text-xs text-gray-500">Type / Port</p>
+                            <p class="font-bold">${sortie.type_camion} / ${sortie.port}</p>
+                        </div>
+                        <div class="bg-gray-50 p-3 rounded-lg">
+                            <p class="text-xs text-gray-500">État actuel</p>
+                            <p class="font-bold uppercase">${sortie.type_sortie}</p>
+                        </div>
+                        <div class="bg-gray-50 p-3 rounded-lg">
+                            <p class="text-xs text-gray-500">Date entrée</p>
+                            <p class="font-bold">${formatDate(sortie.date_entree)}</p>
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-4 gap-3 mb-4">
+                        <div class="bg-blue-50 p-3 rounded-lg">
+                            <p class="text-xs text-gray-500">Date sortie</p>
+                            <p class="font-bold">${formatDate(sortie.date_sortie)}</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Ajouter les informations spécifiques selon le type
+            if (type === 'charge') {
+                // Section pesage
+                if (sortie.pesage_complet !== undefined) {
+                    content += `
+                        <div class="mb-6">
+                            <div class="${sortie.pesage_complet ? 'bg-green-50 border border-green-200' : 'bg-yellow-50 border border-yellow-200'} rounded-lg p-4">
+                                <div class="flex items-center justify-between mb-3">
+                                    <div class="flex items-center">
+                                        <i class="fas fa-weight-scale ${sortie.pesage_complet ? 'text-green-600' : 'text-yellow-600'} mr-3 text-lg"></i>
+                                        <div>
+                                            <p class="text-xs text-gray-600">État du pesage</p>
+                                            <p class="text-sm font-bold ${sortie.pesage_complet ? 'text-green-700' : 'text-yellow-700'}">
+                                                ${sortie.pesage_complet ? 'COMPLET' : 'INCOMPLET'}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div class="text-right">
+                                        <p class="text-xs text-gray-600">Marchandises pesées</p>
+                                        <p class="text-sm font-bold ${sortie.pesage_complet ? 'text-green-700' : 'text-yellow-700'}">
+                                            ${sortie.nb_marchandises_pesees || 0} / ${sortie.nb_marchandises || 0}
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+                
+                // Informations de chargement
+                content += `
+                    <div class="mb-6">
+                        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                            <div class="flex items-center">
+                                <i class="fas fa-upload text-yellow-600 mr-3"></i>
+                                <div>
+                                    <p class="text-xs text-gray-600">Type de sortie</p>
+                                    <p class="text-sm font-bold text-gray-800">CHARGÉ</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                content += `
+                    <div class="mb-6">
+                        <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+                            <div class="flex items-center">
+                                <i class="fas fa-download text-green-600 mr-3"></i>
+                                <div>
+                                    <p class="text-xs text-gray-600">Type de sortie</p>
+                                    <p class="text-sm font-bold text-gray-800">DÉCHARGÉ</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Ajouter la section des marchandises
+            if (type === 'charge' && detailsPesage.length > 0) {
+                content += `
+                    <div class="mb-6">
+                        <h4 class="font-bold text-gray-800 mb-4">
+                            <i class="fas fa-boxes mr-2"></i>Marchandises chargées et état du pesage
+                        </h4>
+                        <div class="space-y-3">
+                `;
+                
+                detailsPesage.forEach((detail, index) => {
+                    const isPese = detail.pese;
+                    const poids = isPese ? detail.poids : 'Non pesé';
+                    const peseeClass = isPese ? 'marchandise-pesee' : 'marchandise-non-pesee';
+                    const statusBadge = isPese ? 
+                        '<span class="bg-green-100 text-green-800 text-xs font-bold px-2 py-1 rounded ml-2">PESÉ</span>' : 
+                        '<span class="bg-red-100 text-red-800 text-xs font-bold px-2 py-1 rounded ml-2">NON PESÉ</span>';
+                    
+                    content += `
+                        <div class="marchandise-item ${peseeClass}">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <p class="font-medium text-gray-800">
+                                        ${detail.nom_marchandise}
+                                        ${statusBadge}
+                                    </p>
+                                    <p class="text-sm text-gray-600 mt-1">
+                                        <span class="font-medium">Poids:</span> ${poids} kg
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                content += `
+                        </div>
+                    </div>
+                `;
+            } else if (marchandises.length > 0) {
+                content += `
+                    <div class="mb-6">
+                        <h4 class="font-bold text-gray-800 mb-4">
+                            <i class="fas fa-boxes mr-2"></i>Marchandises ${type === 'charge' ? 'chargées' : 'déchargées'}
+                        </h4>
+                        <div class="space-y-3">
+                `;
+                
+                marchandises.forEach((march, index) => {
+                    content += `
+                        <div class="marchandise-item">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <p class="font-medium text-gray-800">${march.nom_marchandise}</p>
+                                    ${march.note ? `<p class="text-sm text-gray-600 mt-1">${march.note}</p>` : ''}
+                                </div>
+                                <div class="text-right">
+                                    <p class="text-xs text-gray-500">Ajouté le</p>
+                                    <p class="text-xs text-gray-700">${formatDate(march.date_ajout)}</p>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                content += `
+                        </div>
+                    </div>
+                `;
+            } else {
+                content += `
+                    <div class="text-center py-4 text-gray-500">
+                        <i class="fas fa-exclamation-circle text-2xl mb-2"></i>
+                        <p>Aucune marchandise enregistrée</p>
+                    </div>
+                `;
+            }
+            
+            // Mettre à jour la modal et l'afficher
+            document.getElementById('modalTitle').textContent = titre;
+            document.getElementById('modalContent').innerHTML = content;
+            document.getElementById('detailsModal').style.display = 'block';
+        }
+        
+        // Fonction pour fermer la modal
+        function closeModal() {
+            document.getElementById('detailsModal').style.display = 'none';
+        }
+        
+        // Fermer la modal en cliquant en dehors
+        window.onclick = function(event) {
+            const modal = document.getElementById('detailsModal');
+            if (event.target == modal) {
+                closeModal();
+            }
+        }
+        
+        // Fonctions utilitaires
+        function formatNumber(num) {
+            if (!num) return '0.00';
+            return parseFloat(num).toLocaleString('fr-FR', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            });
+        }
+        
+        function formatDate(dateString) {
+            if (!dateString) return 'N/A';
+            const date = new Date(dateString);
+            return date.toLocaleDateString('fr-FR', {
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+    </script>
 </body>
 </html>
