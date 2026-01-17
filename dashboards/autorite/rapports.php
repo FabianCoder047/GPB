@@ -1091,18 +1091,18 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
                             <button type="submit" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-6 rounded-lg">
                                 <i class="fas fa-filter mr-2"></i>Appliquer les filtres
                             </button>
-                            <a href="historique.php" class="ml-2 text-gray-600 hover:text-gray-800 font-medium py-2 px-4 rounded-lg">
+                            <a href="historiques.php" class="ml-2 text-gray-600 hover:text-gray-800 font-medium py-2 px-4 rounded-lg">
                                 <i class="fas fa-times mr-2"></i>Réinitialiser
                             </a>
                         </div>
                         
                         <?php if (!empty($resultats)): ?>
                             <div class="flex space-x-2">
-                                <a href="historique.php?<?php echo http_build_query($_GET); ?>&export=excel" 
+                                <a href="rapports.php?<?php echo http_build_query($_GET); ?>&export=excel" 
                                    class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-6 rounded-lg">
                                     <i class="fas fa-file-excel mr-2"></i>Exporter Excel
                                 </a>
-                                <a href="historique.php?<?php echo http_build_query($_GET); ?>&export=pdf" 
+                                <a href="rapports.php?<?php echo http_build_query($_GET); ?>&export=pdf" 
                                    class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-6 rounded-lg">
                                     <i class="fas fa-file-pdf mr-2"></i>Exporter PDF
                                 </a>
