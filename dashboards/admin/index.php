@@ -847,10 +847,7 @@ while ($row = $result->fetch_assoc()) {
                     <div>
                         <p class="text-xs font-medium text-gray-600">Tonnage camion</p>
                         <p class="text-xl font-bold text-gray-800 mt-1">
-                            <?php echo number_format($stats_globales['tonnage_camion_t'], 1); ?> t
-                        </p>
-                        <p class="text-xs text-gray-500 mt-1">
-                            <?php echo number_format($stats_globales['tonnage_camion_kg']); ?> kg
+                            <?php echo number_format($stats_globales['tonnage_camion_t'], 1); ?> kg
                         </p>
                     </div>
                     <div class="bg-purple-50 p-2 rounded-full">
@@ -874,10 +871,7 @@ while ($row = $result->fetch_assoc()) {
                         <p class="text-xs font-medium text-gray-600">Tonnage bateau</p>
                         <p class="text-xl font-bold text-gray-800 mt-1">
                             <?php echo number_format($stats_globales['tonnage_bateau_t'], 1); ?> t
-                        </p>
-                        <p class="text-xs text-gray-500 mt-1">
-                            <?php echo number_format($stats_globales['tonnage_bateau_kg']); ?> kg
-                        </p>
+                        </p>    
                     </div>
                     <div class="bg-cyan-50 p-2 rounded-full">
                         <i class="fas fa-weight-hanging text-cyan-600 text-lg"></i>
