@@ -278,7 +278,7 @@ if ($onglet_actif === 'sortie') {
     LEFT JOIN pesages ps ON ce.idEntree = ps.idEntree
     WHERE EXISTS (
         SELECT 1 FROM marchandise_chargement_camion mcc 
-        WHERE mcc.idChargement = cc.idChargement AND mcc.poids = 0
+        WHERE mcc.idChargement = cc.idChargement
     )
     ';
     
@@ -471,6 +471,16 @@ if ($mode == 'view' && $pesage_existant) {
         .info-bulle:hover .info-text {
             visibility: visible;
             opacity: 1;
+        }
+        
+        .poids-manquant {
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { border-color: #fbbf24; }
+            50% { border-color: #f87171; }
+            100% { border-color: #fbbf24; }
         }
     </style>
 </head>
@@ -857,16 +867,18 @@ if ($mode == 'view' && $pesage_existant) {
                             </div>
                         </div>
                         
-                        <!-- Marchandises (caché si camion vide) -->
-                        <?php if (!$isCamionVide): ?>
+                        <!-- Marchandises (toujours affiché pour la sortie, conditionnel pour l'entrée) -->
+                        <?php if ($onglet_actif === 'entree' ? !$isCamionVide : true): ?>
                         <div class="mb-6" id="marchandisesSection">
                             <div class="flex justify-between items-center mb-3">
                                 <h3 class="text-md font-bold text-gray-800">Marchandises</h3>
                                 <?php if ($mode != 'view'): ?>
-                                    <button type="button" id="addMarchandise" 
-                                            class="bg-green-500 hover:bg-green-600 text-white text-sm font-bold py-2 px-3 rounded-lg">
-                                        <i class="fas fa-plus mr-1"></i>Ajouter
-                                    </button>
+                                    <?php if ($onglet_actif === 'entree'): ?>
+                                        <button type="button" id="addMarchandise" 
+                                                class="bg-green-500 hover:bg-green-600 text-white text-sm font-bold py-2 px-3 rounded-lg">
+                                            <i class="fas fa-plus mr-1"></i>Ajouter une marchandise
+                                        </button>
+                                    <?php endif; ?>
                                 <?php endif; ?>
                             </div>
                             
@@ -874,10 +886,15 @@ if ($mode == 'view' && $pesage_existant) {
                                 <div class="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
                                     <div class="flex items-center">
                                         <i class="fas fa-info-circle text-blue-600 mr-2"></i>
-                                        <p class="text-sm text-blue-800">
-                                            Ce camion a <?php echo count($marchandises_chargement); ?> marchandise(s) à peser. 
-                                            Veuillez saisir le poids réel de chaque marchandise ci-dessous.
-                                        </p>
+                                        <div>
+                                            <p class="text-sm font-medium text-blue-800 mb-1">
+                                                Ce camion contient <?php echo count($marchandises_chargement); ?> marchandise(s) à peser.
+                                            </p>
+                                            <p class="text-xs text-blue-600">
+                                                Veuillez saisir le poids réel de chaque marchandise dans les champs ci-dessous.
+                                                <strong>Important :</strong> Ces poids seront enregistrés dans le système de chargement.
+                                            </p>
+                                        </div>
                                     </div>
                                 </div>
                             <?php endif; ?>
@@ -885,13 +902,27 @@ if ($mode == 'view' && $pesage_existant) {
                             <div id="marchandisesContainer" class="space-y-3 max-h-64 overflow-y-auto p-1">
                                 <?php if (!empty($marchandises)): ?>
                                     <?php foreach ($marchandises as $index => $marchandise): ?>
-                                    <div class="marchandise-item border rounded-lg p-3">
+                                    <div class="marchandise-item border rounded-lg p-3 <?php echo ($onglet_actif === 'sortie' && isset($marchandise['from_chargement'])) ? 'border-blue-300 bg-blue-50' : ''; ?>">
                                         <div class="flex justify-between items-center mb-2">
-                                            <h4 class="font-medium text-gray-700 text-sm">Marchandise #<?php echo $index + 1; ?></h4>
+                                            <h4 class="font-medium text-gray-700 text-sm">
+                                                Marchandise #<?php echo $index + 1; ?>
+                                                <?php if ($onglet_actif === 'sortie' && isset($marchandise['from_chargement'])): ?>
+                                                    <span class="ml-2 text-xs text-blue-600 bg-blue-100 px-2 py-0.5 rounded-full">
+                                                        <i class="fas fa-truck-loading mr-1"></i>Chargement
+                                                    </span>
+                                                <?php endif; ?>
+                                            </h4>
                                             <?php if ($mode != 'view'): ?>
-                                                <button type="button" class="remove-marchandise text-red-600 hover:text-red-800 text-sm">
-                                                    <i class="fas fa-times"></i>
-                                                </button>
+                                                <?php if ($onglet_actif === 'entree' || ($onglet_actif === 'sortie' && !isset($marchandise['from_chargement']))): ?>
+                                                    <button type="button" class="remove-marchandise text-red-600 hover:text-red-800 text-sm">
+                                                        <i class="fas fa-times"></i>
+                                                    </button>
+                                                <?php else: ?>
+                                                    <!-- En sortie, ne pas permettre de supprimer les marchandises du chargement -->
+                                                    <span class="text-xs text-gray-400" title="Marchandise du chargement - non supprimable">
+                                                        <i class="fas fa-lock"></i>
+                                                    </span>
+                                                <?php endif; ?>
                                             <?php endif; ?>
                                         </div>
                                         <div class="grid grid-cols-2 gap-3">
@@ -918,9 +949,9 @@ if ($mode == 'view' && $pesage_existant) {
                                                 </label>
                                                 <input type="number" name="marchandises[<?php echo $index; ?>][poids]" 
                                                        step="0.01" min="0.01" value="<?php echo safe_html($marchandise['poids']); ?>"
-                                                       class="marchandise-poids w-full px-2 py-1 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500" 
+                                                       class="marchandise-poids w-full px-2 py-1 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 <?php echo ($onglet_actif === 'sortie' && empty($marchandise['poids'])) ? 'poids-manquant border-yellow-300 bg-yellow-50' : ''; ?>" 
                                                        <?php echo ($mode == 'view') ? 'readonly' : ''; ?>
-                                                       placeholder="Saisir le poids"
+                                                       placeholder="<?php echo $onglet_actif === 'sortie' && empty($marchandise['poids']) ? 'Saisir le poids réel (kg)' : 'Saisir le poids'; ?>"
                                                        required>
                                             </div>
                                         </div>
@@ -1045,7 +1076,7 @@ if ($mode == 'view' && $pesage_existant) {
                 </div>
                 
                 <!-- Détails du pesage existant -->
-                <?php if ($pesage_existant && !empty($marchandises) && !$isCamionVide): ?>
+                <?php if ($pesage_existant && !empty($marchandises) && ($onglet_actif === 'entree' ? !$isCamionVide : true)): ?>
                 <div class="border-t p-4">
                     <h3 class="text-md font-bold text-gray-800 mb-3">
                         <i class="fas fa-list mr-1"></i>Détails des Marchandises
@@ -1120,12 +1151,22 @@ if ($mode == 'view' && $pesage_existant) {
                 noMarchandises.style.display = 'none';
             }
             
+            // Déterminer si on est en sortie
+            const isSortie = ongletActif === 'sortie';
+            
             // Créer le nouvel élément
             const newField = document.createElement('div');
             newField.className = 'marchandise-item border rounded-lg p-3';
+            if (isSortie) {
+                newField.classList.add('border-purple-300', 'bg-purple-50');
+            }
+            
             newField.innerHTML = `
                 <div class="flex justify-between items-center mb-2">
-                    <h4 class="font-medium text-gray-700 text-sm">Marchandise #${marchandiseIndex + 1}</h4>
+                    <h4 class="font-medium text-gray-700 text-sm">
+                        Marchandise #${marchandiseIndex + 1}
+                        ${isSortie ? '<span class="ml-2 text-xs text-purple-600 bg-purple-100 px-2 py-0.5 rounded-full"><i class="fas fa-plus-circle mr-1"></i>Supplémentaire</span>' : ''}
+                    </h4>
                     <button type="button" class="remove-marchandise text-red-600 hover:text-red-800 text-sm">
                         <i class="fas fa-times"></i>
                     </button>
@@ -1269,7 +1310,7 @@ if ($mode == 'view' && $pesage_existant) {
             const ptra = parseFloat(document.getElementById('ptra').value) || 0;
             
             let totalMarchandises = 0;
-            if (!isCamionVide) {
+            if ((ongletActif === 'entree' ? !isCamionVide : true)) {
                 totalMarchandises = updateMarchandisesSummary();
             }
             
@@ -1318,6 +1359,46 @@ if ($mode == 'view' && $pesage_existant) {
             return { isSurcharge, poidsTotalCamion, ptac, ptra };
         }
         
+        // Fonction pour valider le formulaire
+        function validateForm(e) {
+            const ptav = document.getElementById('ptav').value;
+            const ptac = document.getElementById('ptac').value;
+            const ptra = document.getElementById('ptra').value;
+            const etatCamion = document.getElementById('etat_camion')?.value?.toLowerCase() || '';
+            
+            if (!ptav || !ptac || !ptra) {
+                e.preventDefault();
+                alert('Veuillez remplir tous les champs obligatoires de pesage (PTAV, PTAC, PTRA)');
+                return false;
+            }
+            
+            // Si le camion n'est pas vide ou si c'est la sortie, vérifier les marchandises
+            if ((ongletActif === 'entree' ? !isCamionVide : true)) {
+                const poidsInputs = document.querySelectorAll('.marchandise-poids');
+                let hasValidMarchandises = false;
+                poidsInputs.forEach(input => {
+                    if (input.value && parseFloat(input.value) > 0) {
+                        hasValidMarchandises = true;
+                    }
+                });
+                
+                if (!hasValidMarchandises) {
+                    if (ongletActif === 'sortie') {
+                        e.preventDefault();
+                        alert('Pour le pesage de sortie, vous devez saisir le poids d\'au moins une marchandise.');
+                        return false;
+                    } else {
+                        if (!confirm('Aucune marchandise avec un poids valide n\'a été saisie. Voulez-vous continuer ?')) {
+                            e.preventDefault();
+                            return false;
+                        }
+                    }
+                }
+            }
+            
+            return true;
+        }
+        
         // Événements
         document.addEventListener('DOMContentLoaded', function() {
             // Gestion des onglets
@@ -1327,6 +1408,81 @@ if ($mode == 'view' && $pesage_existant) {
                     changerOnglet(onglet);
                 });
             });
+            
+            // Configuration spécifique pour l'onglet sortie
+            if (ongletActif === 'sortie' && !isViewMode) {
+                // Pour la sortie, les marchandises sont pré-remplies depuis le chargement
+                // On ne permet pas d'ajouter de nouvelles marchandises (sauf si besoin spécifique)
+                const addBtn = document.getElementById('addExtraMarchandise');
+                if (addBtn) {
+                    // Le bouton est déjà configuré avec un message d'alerte
+                }
+                
+                // Ajouter un message si aucune marchandise
+                const noMarchandises = document.getElementById('noMarchandises');
+                if (noMarchandises && marchandiseIndex === 0) {
+                    noMarchandises.innerHTML = `
+                        <i class="fas fa-box text-xl mb-1"></i>
+                        <p class="text-sm">
+                            Aucune marchandise à peser pour ce camion.
+                            <br>
+                            <span class="text-xs">Si le camion transporte des marchandises, contactez l'administration.</span>
+                        </p>
+                    `;
+                }
+                
+                // Mettre en évidence les champs de poids à remplir
+                const poidsInputs = document.querySelectorAll('.marchandise-poids');
+                poidsInputs.forEach(input => {
+                    if (parseFloat(input.value) === 0) {
+                        input.classList.add('poids-manquant', 'border-yellow-300', 'bg-yellow-50');
+                        input.placeholder = "Saisir le poids réel (kg)";
+                    }
+                });
+                
+                // Ajouter la validation spécifique pour la sortie
+                const form = document.getElementById('pesageForm');
+                if (form) {
+                    const originalSubmit = form.onsubmit;
+                    form.onsubmit = function(e) {
+                        if (!validateForm(e)) {
+                            return false;
+                        }
+                        
+                        // Validation spécifique pour la sortie
+                        if (ongletActif === 'sortie') {
+                            const poidsInputs = document.querySelectorAll('.marchandise-poids');
+                            let hasUnweighedItems = false;
+                            let hasValidMarchandises = false;
+                            
+                            poidsInputs.forEach(input => {
+                                const poids = parseFloat(input.value) || 0;
+                                if (poids === 0) {
+                                    hasUnweighedItems = true;
+                                    input.classList.add('border-red-300', 'bg-red-50');
+                                } else if (poids > 0) {
+                                    hasValidMarchandises = true;
+                                }
+                            });
+                            
+                            if (hasUnweighedItems) {
+                                if (!confirm('Certaines marchandises ont un poids de 0 kg. Voulez-vous continuer sans peser toutes les marchandises ?')) {
+                                    e.preventDefault();
+                                    return false;
+                                }
+                            }
+                            
+                            if (!hasValidMarchandises) {
+                                e.preventDefault();
+                                alert('Veuillez saisir le poids d\'au moins une marchandise pour le pesage de sortie.');
+                                return false;
+                            }
+                        }
+                        
+                        return true;
+                    };
+                }
+            }
             
             if (isViewMode) {
                 // En mode view, afficher directement les résultats
@@ -1345,8 +1501,14 @@ if ($mode == 'view' && $pesage_existant) {
                     addMarchandiseBtn.disabled = true;
                     addMarchandiseBtn.classList.add('opacity-50', 'cursor-not-allowed');
                 }
+                
+                const addExtraBtn = document.getElementById('addExtraMarchandise');
+                if (addExtraBtn) {
+                    addExtraBtn.disabled = true;
+                    addExtraBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                }
             } else {
-                // Bouton pour ajouter une marchandise
+                // Bouton pour ajouter une marchandise (entrée)
                 const addBtn = document.getElementById('addMarchandise');
                 if (addBtn) {
                     addBtn.addEventListener('click', addMarchandiseField);
@@ -1359,7 +1521,7 @@ if ($mode == 'view' && $pesage_existant) {
                 }
                 
                 // Écouter les changements dans les champs de poids
-                if (!isCamionVide) {
+                if ((ongletActif === 'entree' ? !isCamionVide : true)) {
                     document.addEventListener('input', function(e) {
                         if (e.target.classList.contains('marchandise-poids')) {
                             updateMarchandisesSummary();
@@ -1372,7 +1534,7 @@ if ($mode == 'view' && $pesage_existant) {
                     const element = document.getElementById(id);
                     if (element) {
                         element.addEventListener('input', function() {
-                            if (!isCamionVide) {
+                            if ((ongletActif === 'entree' ? !isCamionVide : true)) {
                                 updateMarchandisesSummary();
                             }
                         });
@@ -1386,7 +1548,7 @@ if ($mode == 'view' && $pesage_existant) {
             }
             
             // Délégation d'événements pour les boutons de suppression
-            if (!isCamionVide) {
+            if ((ongletActif === 'entree' ? !isCamionVide : true)) {
                 document.addEventListener('click', function(e) {
                     if (e.target.closest('.remove-marchandise')) {
                         removeMarchandiseField(e.target.closest('.remove-marchandise'));
@@ -1395,47 +1557,31 @@ if ($mode == 'view' && $pesage_existant) {
             }
             
             // Mettre à jour le résumé initial
-            if (!isCamionVide) {
+            if ((ongletActif === 'entree' ? !isCamionVide : true)) {
                 updateMarchandisesSummary();
             }
             
             // Valider le formulaire avant soumission
             const form = document.getElementById('pesageForm');
             if (form && !isViewMode) {
-                form.addEventListener('submit', function(e) {
-                    const ptav = document.getElementById('ptav').value;
-                    const ptac = document.getElementById('ptac').value;
-                    const ptra = document.getElementById('ptra').value;
-                    const etatCamion = document.getElementById('etat_camion')?.value?.toLowerCase() || '';
-                    
-                    if (!ptav || !ptac || !ptra) {
-                        e.preventDefault();
-                        alert('Veuillez remplir tous les champs obligatoires de pesage (PTAV, PTAC, PTRA)');
-                        return false;
-                    }
-                    
-                    // Si le camion n'est pas vide, vérifier les marchandises
-                    if (!isCamionVide && etatCamion !== 'vide') {
-                        const poidsInputs = document.querySelectorAll('.marchandise-poids');
-                        let hasValidMarchandises = false;
-                        poidsInputs.forEach(input => {
-                            if (input.value && parseFloat(input.value) > 0) {
-                                hasValidMarchandises = true;
-                            }
-                        });
-                        
-                        if (!hasValidMarchandises) {
-                            if (!confirm('Aucune marchandise avec un poids valide n\'a été saisie. Voulez-vous continuer ?')) {
-                                e.preventDefault();
-                                return false;
-                            }
-                        }
-                    }
-                    
-                    return true;
-                });
+                form.addEventListener('submit', validateForm);
             }
         });
     </script>
+    <script>
+document.addEventListener('DOMContentLoaded', function() {
+    const currentPath = window.location.pathname;
+    const navLinks = document.querySelectorAll('nav a');
+    
+    navLinks.forEach(link => {
+        const linkPath = link.getAttribute('href');
+        // Vérifier si le lien correspond à la page actuelle
+        if (currentPath.includes(linkPath) && linkPath !== '../../logout.php') {
+            link.classList.add('bg-blue-100', 'text-blue-600', 'font-semibold');
+            link.classList.remove('hover:bg-gray-100');
+        }
+    });
+});
+</script>
 </body>
 </html>

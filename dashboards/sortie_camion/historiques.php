@@ -19,7 +19,7 @@ function safe_html($value) {
     return htmlspecialchars($value ?? '', ENT_QUOTES, 'UTF-8');
 }
 
-// Fonction pour vérifier si toutes les marchandises d'un chargement ont été pesées
+// Fonction pour vérifier si toutes les marchandises d'un chargement ont été pesées (version corrigée)
 function checkPesageComplet($conn, $chargement_id) {
     $result = [
         'complet' => false,
@@ -29,11 +29,12 @@ function checkPesageComplet($conn, $chargement_id) {
     ];
     
     try {
-        // Récupérer toutes les marchandises du chargement
+        // Récupérer toutes les marchandises du chargement avec leur poids
         $stmt = $conn->prepare("
             SELECT 
                 mcc.idTypeMarchandise,
-                tm.nom as nom_marchandise
+                tm.nom as nom_marchandise,
+                mcc.poids
             FROM marchandise_chargement_camion mcc
             INNER JOIN type_marchandise tm ON mcc.idTypeMarchandise = tm.id
             WHERE mcc.idChargement = ?
@@ -50,58 +51,15 @@ function checkPesageComplet($conn, $chargement_id) {
             return $result;
         }
         
-        // Récupérer les pesages pour ce chargement
-        $stmt = $conn->prepare("
-            SELECT 
-                pcc.idPesageChargement,
-                pcc.date_pesage,
-                mpc.idTypeMarchandise,
-                mpc.poids
-            FROM pesage_chargement_camion pcc
-            LEFT JOIN marchandises_pesage_camion mpc ON pcc.idPesageChargement = mpc.idPesageChargement
-            WHERE pcc.idChargement = ?
-            ORDER BY pcc.date_pesage DESC
-            LIMIT 1
-        ");
-        $stmt->bind_param("i", $chargement_id);
-        $stmt->execute();
-        $pesage_result = $stmt->get_result();
-        
-        // Si aucun pesage n'existe
-        if ($pesage_result->num_rows === 0) {
-            $result['complet'] = false;
-            // Préparer les détails
-            foreach ($marchandises as $march) {
-                $result['details'][] = [
-                    'idTypeMarchandise' => $march['idTypeMarchandise'],
-                    'nom_marchandise' => $march['nom_marchandise'],
-                    'pese' => false,
-                    'poids' => null
-                ];
-            }
-            return $result;
-        }
-        
-        // Récupérer le dernier pesage
-        $pesage_data = [];
-        while ($row = $pesage_result->fetch_assoc()) {
-            if ($row['idTypeMarchandise']) {
-                $pesage_data[$row['idTypeMarchandise']] = [
-                    'poids' => $row['poids'],
-                    'date_pesage' => $row['date_pesage']
-                ];
-            }
-        }
-        
-        // Vérifier chaque marchandise
+        // Vérifier le poids de chaque marchandise
         $marchandises_pesees = 0;
         foreach ($marchandises as $march) {
-            $pese = isset($pesage_data[$march['idTypeMarchandise']]);
+            $pese = (!empty($march['poids']) && floatval($march['poids']) > 0);
             $result['details'][] = [
                 'idTypeMarchandise' => $march['idTypeMarchandise'],
                 'nom_marchandise' => $march['nom_marchandise'],
                 'pese' => $pese,
-                'poids' => $pese ? $pesage_data[$march['idTypeMarchandise']]['poids'] : null
+                'poids' => $pese ? floatval($march['poids']) : 0
             ];
             
             if ($pese) {
@@ -117,6 +75,51 @@ function checkPesageComplet($conn, $chargement_id) {
     } catch (Exception $e) {
         error_log("Erreur vérification pesage: " . $e->getMessage());
         $result['complet'] = false;
+        return $result;
+    }
+}
+
+// Fonction pour récupérer les informations de pesage d'un camion (depuis la table pesages)
+function getInfosPesage($conn, $camion_id) {
+    $result = [
+        'ptav' => 0,
+        'ptac' => 0,
+        'ptra' => 0,
+        'charge_essieu' => 0,
+        'poids_total_marchandises' => 0,
+        'surcharge' => false,
+        'date_pesage' => null
+    ];
+    
+    try {
+        $stmt = $conn->prepare("
+            SELECT ptav, ptac, ptra, charge_essieu, poids_total_marchandises, surcharge, date_pesage
+            FROM pesages 
+            WHERE idEntree = ?
+            ORDER BY date_pesage DESC
+            LIMIT 1
+        ");
+        $stmt->bind_param("i", $camion_id);
+        $stmt->execute();
+        $pesage_result = $stmt->get_result();
+        
+        if ($pesage_result->num_rows > 0) {
+            $pesage = $pesage_result->fetch_assoc();
+            $result = [
+                'ptav' => $pesage['ptav'] ?? 0,
+                'ptac' => $pesage['ptac'] ?? 0,
+                'ptra' => $pesage['ptra'] ?? 0,
+                'charge_essieu' => $pesage['charge_essieu'] ?? 0,
+                'poids_total_marchandises' => $pesage['poids_total_marchandises'] ?? 0,
+                'surcharge' => $pesage['surcharge'] ?? false,
+                'date_pesage' => $pesage['date_pesage'] ?? null
+            ];
+        }
+        
+        return $result;
+        
+    } catch (Exception $e) {
+        error_log("Erreur récupération infos pesage: " . $e->getMessage());
         return $result;
     }
 }
@@ -220,34 +223,31 @@ try {
     $offset = ($current_page - 1) * $items_per_page;
     
     // Requête principale avec filtres et pagination
+    // MODIFIÉ : Suppression de la jointure avec pesage_chargement_camion qui n'est pas utilisée
     $query = "SELECT cs.idSortie, cs.idEntree, cs.idChargement, cs.idDechargement, 
                      cs.date_sortie, cs.type_sortie,
                      ce.immatriculation, ce.etat, ce.date_entree, ce.idPort, 
-                     ce.poids, ce.idTypeCamion,
-                     tc.nom as type_camion, p.nom as port,
-                     COALESCE(SUM(mpc.poids), 0) as poids_total_marchandises
+                     ce.poids as poids_camion, ce.idTypeCamion, ce.raison,
+                     ce.prenom_chauffeur, ce.nom_chauffeur,
+                     tc.nom as type_camion, p.nom as port
               FROM camions_sortants cs
               LEFT JOIN camions_entrants ce ON cs.idEntree = ce.idEntree
               LEFT JOIN type_camion tc ON ce.idTypeCamion = tc.id
               LEFT JOIN port p ON ce.idPort = p.id
-              LEFT JOIN pesage_chargement_camion pcc ON cs.idChargement = pcc.idChargement
-              LEFT JOIN marchandises_pesage_camion mpc ON pcc.idPesageChargement = mpc.idPesageChargement
               $where_sql
-              GROUP BY cs.idSortie, cs.idEntree, cs.idChargement, cs.idDechargement, 
-                       cs.date_sortie, cs.type_sortie,
-                       ce.immatriculation, ce.etat, ce.date_entree, ce.idPort, 
-                       ce.poids, ce.idTypeCamion,
-                       tc.nom, p.nom
               ORDER BY cs.date_sortie DESC
               LIMIT ? OFFSET ?";
     
-    $params[] = $items_per_page;
-    $params[] = $offset;
-    $types .= 'ii';
+    // Préparation de la requête avec pagination
+    $params_pagination = $params;
+    $types_pagination = $types;
+    $params_pagination[] = $items_per_page;
+    $params_pagination[] = $offset;
+    $types_pagination .= 'ii';
     
     $stmt = $conn->prepare($query);
-    if (!empty($types)) {
-        $stmt->bind_param($types, ...$params);
+    if (!empty($types_pagination)) {
+        $stmt->bind_param($types_pagination, ...$params_pagination);
     }
     $stmt->execute();
     $result = $stmt->get_result();
@@ -255,7 +255,20 @@ try {
     
     // Récupérer les détails supplémentaires pour chaque sortie
     foreach ($sorties as &$sortie) {
-        // Récupérer les pesages si chargement
+        // Récupérer les informations de pesage
+        $pesage_infos = getInfosPesage($conn, $sortie['idEntree']);
+        $sortie['ptav'] = $pesage_infos['ptav'];
+        $sortie['ptac'] = $pesage_infos['ptac'];
+        $sortie['ptra'] = $pesage_infos['ptra'];
+        $sortie['charge_essieu'] = $pesage_infos['charge_essieu'];
+        $sortie['poids_total_marchandises'] = $pesage_infos['poids_total_marchandises'];
+        $sortie['surcharge'] = $pesage_infos['surcharge'];
+        $sortie['date_pesage'] = $pesage_infos['date_pesage'];
+        
+        // Calculer le poids total du camion
+        $sortie['poids_total_camion'] = $sortie['ptav'] + $sortie['poids_total_marchandises'];
+        
+        // Récupérer les informations de pesage si chargement
         if ($sortie['type_sortie'] === 'charge' && !empty($sortie['idChargement'])) {
             $pesage_status = checkPesageComplet($conn, $sortie['idChargement']);
             $sortie['pesage_complet'] = $pesage_status['complet'];
@@ -268,6 +281,7 @@ try {
     
 } catch (Exception $e) {
     $error = "Erreur lors du chargement des données: " . $e->getMessage();
+    error_log("Erreur chargement historiques: " . $e->getMessage());
     $sorties = [];
     $total_items = 0;
     $total_pages = 1;
@@ -291,6 +305,7 @@ try {
                 mcc.idChargement,
                 mcc.idTypeMarchandise,
                 tm.nom as nom_marchandise,
+                mcc.poids,
                 mcc.note,
                 mcc.date_ajout
             FROM marchandise_chargement_camion mcc
@@ -418,7 +433,7 @@ try {
             margin: 5% auto;
             padding: 0;
             width: 80%;
-            max-width: 800px;
+            max-width: 900px;
             border-radius: 12px;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             animation: modalSlideIn 0.3s ease-out;
@@ -455,6 +470,36 @@ try {
         
         .marchandise-non-pesee {
             border-left-color: #ef4444;
+        }
+        
+        .info-card {
+            background-color: #f8fafc;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        
+        .pesage-info-card {
+            background-color: #f0f9ff;
+            border-left: 4px solid #3b82f6;
+        }
+        
+        .surcharge-badge {
+            background-color: #fee2e2;
+            color: #dc2626;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .conforme-badge {
+            background-color: #d1fae5;
+            color: #065f46;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
         }
     </style>
 </head>
@@ -618,7 +663,7 @@ try {
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Immatriculation</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type Camion</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Port</th>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date Entrée</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Chauffeur</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type Sortie</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                         </tr>
@@ -640,7 +685,7 @@ try {
                             </td>
                             
                             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
-                                <?php echo !empty($sortie['date_entree']) ? date('d/m/Y H:i', strtotime($sortie['date_entree'])) : 'N/A'; ?>
+                                <?php echo safe_html(($sortie['prenom_chauffeur'] ?? '') . ' ' . ($sortie['nom_chauffeur'] ?? '')); ?>
                             </td>
                             <td class="px-4 py-3 whitespace-nowrap">
                                 <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
@@ -782,51 +827,112 @@ try {
             
             let marchandises = [];
             let detailsPesage = [];
-            let titre = '';
+            let titre = `Détails de la sortie - ${sortie.immatriculation}`;
             
             if (type === 'charge') {
                 marchandises = marchandisesCharge[chargementId] || [];
                 detailsPesage = sortie.details_pesage || [];
-                titre = `Détails du camion ${sortie.immatriculation} (Chargé) - Sorti le ${formatDate(sortie.date_sortie)}`;
             } else {
                 marchandises = marchandisesDecharge[dechargementId] || [];
-                titre = `Détails du camion ${sortie.immatriculation} (Déchargé) - Sorti le ${formatDate(sortie.date_sortie)}`;
             }
             
             // Construire le contenu HTML
             let content = `
                 <div class="mb-6">
-                    <div class="grid grid-cols-2 gap-4 mb-4">
-                        <div class="bg-gray-50 p-3 rounded-lg">
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                        <div class="info-card">
                             <p class="text-xs text-gray-500">Immatriculation</p>
-                            <p class="font-bold">${sortie.immatriculation}</p>
+                            <p class="font-bold text-lg">${sortie.immatriculation}</p>
                         </div>
-                        <div class="bg-gray-50 p-3 rounded-lg">
+                        <div class="info-card">
                             <p class="text-xs text-gray-500">Type / Port</p>
-                            <p class="font-bold">${sortie.type_camion} / ${sortie.port}</p>
+                            <p class="font-medium">${sortie.type_camion || '-'} / ${sortie.port || '-'}</p>
                         </div>
-                        <div class="bg-gray-50 p-3 rounded-lg">
-                            <p class="text-xs text-gray-500">État actuel</p>
-                            <p class="font-bold uppercase">${sortie.type_sortie}</p>
+                        <div class="info-card">
+                            <p class="text-xs text-gray-500">Chauffeur</p>
+                            <p class="font-medium">${sortie.prenom_chauffeur || ''} ${sortie.nom_chauffeur || ''}</p>
                         </div>
-                        <div class="bg-gray-50 p-3 rounded-lg">
-                            <p class="text-xs text-gray-500">Date entrée</p>
-                            <p class="font-bold">${formatDate(sortie.date_entree)}</p>
+                        <div class="info-card">
+                            <p class="text-xs text-gray-500">Raison</p>
+                            <p class="font-medium">${sortie.raison || '-'}</p>
                         </div>
                     </div>
                     
-                    <div class="grid grid-cols-4 gap-3 mb-4">
-                        <div class="bg-blue-50 p-3 rounded-lg">
-                            <p class="text-xs text-gray-500">Date sortie</p>
-                            <p class="font-bold">${formatDate(sortie.date_sortie)}</p>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                        <div class="info-card">
+                            <p class="text-xs text-gray-500">Date entrée</p>
+                            <p class="font-medium">${formatDate(sortie.date_entree)}</p>
                         </div>
+                        <div class="info-card">
+                            <p class="text-xs text-gray-500">Date sortie</p>
+                            <p class="font-medium">${formatDate(sortie.date_sortie)}</p>
+                        </div>
+                        <div class="info-card">
+                            <p class="text-xs text-gray-500">Type de sortie</p>
+                            <p class="font-bold ${type === 'charge' ? 'text-blue-600' : 'text-green-600'}">${type === 'charge' ? 'CHARGÉ' : 'DÉCHARGÉ'}</p>
+                        </div>
+                        
                     </div>
                 </div>
             `;
             
+            // Section des informations de pesage (disponible pour tous les camions sortis)
+            if (sortie.date_pesage || sortie.ptav > 0) {
+                const surchargeStatus = sortie.surcharge ? 'SURCHARGE' : 'CONFORME';
+                const surchargeClass = sortie.surcharge ? 'surcharge-badge' : 'conforme-badge';
+                
+                content += `
+                    <div class="mb-6 pesage-info-card p-4">
+                        <h4 class="font-bold text-gray-800 mb-3">
+                            <i class="fas fa-weight-scale mr-2"></i>Informations de Pesage
+                        </h4>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                            <div>
+                                <p class="text-xs text-gray-500">PTAV</p>
+                                <p class="font-bold">${formatNumber(sortie.ptav)} kg</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-gray-500">PTAC</p>
+                                <p class="font-bold">${formatNumber(sortie.ptac)} kg</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-gray-500">PTRA</p>
+                                <p class="font-bold">${formatNumber(sortie.ptra)} kg</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-gray-500">Charge Essieu</p>
+                                <p class="font-bold">${formatNumber(sortie.charge_essieu)} kg</p>
+                            </div>
+                        </div>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                            <div>
+                                <p class="text-xs text-gray-500">Poids marchandises</p>
+                                <p class="font-bold">${formatNumber(sortie.poids_total_marchandises)} kg</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-gray-500">Poids total camion</p>
+                                <p class="font-bold">${formatNumber(sortie.poids_total_camion)} kg</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-gray-500">État</p>
+                                <span class="${surchargeClass}">${surchargeStatus}</span>
+                            </div>
+                        </div>
+                        
+                        ${sortie.date_pesage ? `
+                            <div class="mt-2">
+                                <p class="text-xs text-gray-500">Date du pesage</p>
+                                <p class="text-sm font-medium">${formatDate(sortie.date_pesage)}</p>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }
+            
             // Ajouter les informations spécifiques selon le type
             if (type === 'charge') {
-                // Section pesage
+                // Section état du pesage pour les chargements
                 if (sortie.pesage_complet !== undefined) {
                     content += `
                         <div class="mb-6">
@@ -835,7 +941,7 @@ try {
                                     <div class="flex items-center">
                                         <i class="fas fa-weight-scale ${sortie.pesage_complet ? 'text-green-600' : 'text-yellow-600'} mr-3 text-lg"></i>
                                         <div>
-                                            <p class="text-xs text-gray-600">État du pesage</p>
+                                            <p class="text-xs text-gray-600">État du pesage au moment de la sortie</p>
                                             <p class="text-sm font-bold ${sortie.pesage_complet ? 'text-green-700' : 'text-yellow-700'}">
                                                 ${sortie.pesage_complet ? 'COMPLET' : 'INCOMPLET'}
                                             </p>
@@ -856,9 +962,9 @@ try {
                 // Informations de chargement
                 content += `
                     <div class="mb-6">
-                        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                            <div class="flex items-center">
-                                <i class="fas fa-upload text-yellow-600 mr-3"></i>
+                        <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                            <div class="flex items-center mb-3">
+                                <i class="fas fa-upload text-blue-600 mr-3"></i>
                                 <div>
                                     <p class="text-xs text-gray-600">Type de sortie</p>
                                     <p class="text-sm font-bold text-gray-800">CHARGÉ</p>
@@ -871,7 +977,7 @@ try {
                 content += `
                     <div class="mb-6">
                         <div class="bg-green-50 border border-green-200 rounded-lg p-4">
-                            <div class="flex items-center">
+                            <div class="flex items-center mb-3">
                                 <i class="fas fa-download text-green-600 mr-3"></i>
                                 <div>
                                     <p class="text-xs text-gray-600">Type de sortie</p>
@@ -895,7 +1001,7 @@ try {
                 
                 detailsPesage.forEach((detail, index) => {
                     const isPese = detail.pese;
-                    const poids = isPese ? detail.poids : 'Non pesé';
+                    const poids = isPese ? formatNumber(detail.poids) + ' kg' : 'Non pesé';
                     const peseeClass = isPese ? 'marchandise-pesee' : 'marchandise-non-pesee';
                     const statusBadge = isPese ? 
                         '<span class="bg-green-100 text-green-800 text-xs font-bold px-2 py-1 rounded ml-2">PESÉ</span>' : 
@@ -910,7 +1016,7 @@ try {
                                         ${statusBadge}
                                     </p>
                                     <p class="text-sm text-gray-600 mt-1">
-                                        <span class="font-medium">Poids:</span> ${poids} kg
+                                        <span class="font-medium">Poids:</span> ${poids}
                                     </p>
                                 </div>
                             </div>
@@ -932,11 +1038,15 @@ try {
                 `;
                 
                 marchandises.forEach((march, index) => {
+                    const poidsDisplay = march.poids && parseFloat(march.poids) > 0 ? 
+                        `<p class="text-sm text-gray-600 mt-1"><span class="font-medium">Poids:</span> ${formatNumber(march.poids)} kg</p>` : '';
+                    
                     content += `
                         <div class="marchandise-item">
                             <div class="flex justify-between items-start">
                                 <div>
                                     <p class="font-medium text-gray-800">${march.nom_marchandise}</p>
+                                    ${poidsDisplay}
                                     ${march.note ? `<p class="text-sm text-gray-600 mt-1">${march.note}</p>` : ''}
                                 </div>
                                 <div class="text-right">
@@ -982,7 +1092,7 @@ try {
         
         // Fonctions utilitaires
         function formatNumber(num) {
-            if (!num) return '0.00';
+            if (!num || isNaN(num)) return '0.00';
             return parseFloat(num).toLocaleString('fr-FR', {
                 minimumFractionDigits: 2,
                 maximumFractionDigits: 2
@@ -990,7 +1100,7 @@ try {
         }
         
         function formatDate(dateString) {
-            if (!dateString) return 'N/A';
+            if (!dateString || dateString === '0000-00-00 00:00:00') return 'N/A';
             const date = new Date(dateString);
             return date.toLocaleDateString('fr-FR', {
                 day: '2-digit',
@@ -1001,5 +1111,20 @@ try {
             });
         }
     </script>
+    <script>
+document.addEventListener('DOMContentLoaded', function() {
+    const currentPath = window.location.pathname;
+    const navLinks = document.querySelectorAll('nav a');
+    
+    navLinks.forEach(link => {
+        const linkPath = link.getAttribute('href');
+        // Vérifier si le lien correspond à la page actuelle
+        if (currentPath.includes(linkPath) && linkPath !== '../../logout.php') {
+            link.classList.add('bg-blue-100', 'text-blue-600', 'font-semibold');
+            link.classList.remove('hover:bg-gray-100');
+        }
+    });
+});
+</script>
 </body>
 </html>

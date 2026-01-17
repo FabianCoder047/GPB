@@ -399,7 +399,6 @@ foreach ($camions as $camion) {
                             <tr>
                                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date pesage</th>
                                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Immatriculation</th>
-                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">État</th>
                                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Poids total</th>
                                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Surcharge</th>
                             </tr>
@@ -432,12 +431,7 @@ foreach ($camions as $camion) {
                                         </div>
                                     </div>
                                 </td>
-                                <td class="px-4 py-3 whitespace-nowrap">
-                                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
-                                        <?php echo ($camion['etat'] ?? '') == 'Chargé' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'; ?>">
-                                        <?php echo safe_html($camion['etat'] ?? '-'); ?>
-                                    </span>
-                                </td>
+                                
                                 <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
                                     <?php 
                                     $poids_total = ($camion['ptav'] ?? 0) + ($camion['poids_total_marchandises'] ?? 0);
@@ -517,7 +511,7 @@ foreach ($camions as $camion) {
                             <div class="bg-gray-50 p-3 rounded-lg">
                                 <p class="text-xs text-gray-500">État / Raison</p>
                                 <p class="font-medium text-sm">
-                                    <?php echo safe_html($selected_camion['etat'] ?? ''); ?> / 
+                                    Chargé / 
                                     <?php echo safe_html($selected_camion['raison'] ?? ''); ?>
                                 </p>
                             </div>
@@ -891,5 +885,20 @@ foreach ($camions as $camion) {
             }
         });
     </script>
+    <script>
+document.addEventListener('DOMContentLoaded', function() {
+    const currentPath = window.location.pathname;
+    const navLinks = document.querySelectorAll('nav a');
+    
+    navLinks.forEach(link => {
+        const linkPath = link.getAttribute('href');
+        // Vérifier si le lien correspond à la page actuelle
+        if (currentPath.includes(linkPath) && linkPath !== '../../logout.php') {
+            link.classList.add('bg-blue-100', 'text-blue-600', 'font-semibold');
+            link.classList.remove('hover:bg-gray-100');
+        }
+    });
+});
+</script>
 </body>
 </html>

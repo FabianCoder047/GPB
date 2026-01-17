@@ -29,11 +29,12 @@ function checkPesageComplet($conn, $chargement_id) {
     ];
     
     try {
-        // Récupérer toutes les marchandises du chargement
+        // Récupérer toutes les marchandises du chargement avec leur poids
         $stmt = $conn->prepare("
             SELECT 
                 mcc.idTypeMarchandise,
-                tm.nom as nom_marchandise
+                tm.nom as nom_marchandise,
+                mcc.poids
             FROM marchandise_chargement_camion mcc
             INNER JOIN type_marchandise tm ON mcc.idTypeMarchandise = tm.id
             WHERE mcc.idChargement = ?
@@ -50,58 +51,15 @@ function checkPesageComplet($conn, $chargement_id) {
             return $result;
         }
         
-        // Récupérer les pesages pour ce chargement
-        $stmt = $conn->prepare("
-            SELECT 
-                pcc.idPesageChargement,
-                pcc.date_pesage,
-                mpc.idTypeMarchandise,
-                mpc.poids
-            FROM pesage_chargement_camion pcc
-            LEFT JOIN marchandises_pesage_camion mpc ON pcc.idPesageChargement = mpc.idPesageChargement
-            WHERE pcc.idChargement = ?
-            ORDER BY pcc.date_pesage DESC
-            LIMIT 1
-        ");
-        $stmt->bind_param("i", $chargement_id);
-        $stmt->execute();
-        $pesage_result = $stmt->get_result();
-        
-        // Si aucun pesage n'existe
-        if ($pesage_result->num_rows === 0) {
-            $result['complet'] = false;
-            // Préparer les détails
-            foreach ($marchandises as $march) {
-                $result['details'][] = [
-                    'idTypeMarchandise' => $march['idTypeMarchandise'],
-                    'nom_marchandise' => $march['nom_marchandise'],
-                    'pese' => false,
-                    'poids' => null
-                ];
-            }
-            return $result;
-        }
-        
-        // Récupérer le dernier pesage
-        $pesage_data = [];
-        while ($row = $pesage_result->fetch_assoc()) {
-            if ($row['idTypeMarchandise']) {
-                $pesage_data[$row['idTypeMarchandise']] = [
-                    'poids' => $row['poids'],
-                    'date_pesage' => $row['date_pesage']
-                ];
-            }
-        }
-        
-        // Vérifier chaque marchandise
+        // Vérifier le poids de chaque marchandise
         $marchandises_pesees = 0;
         foreach ($marchandises as $march) {
-            $pese = isset($pesage_data[$march['idTypeMarchandise']]);
+            $pese = (!empty($march['poids']) && floatval($march['poids']) > 0);
             $result['details'][] = [
                 'idTypeMarchandise' => $march['idTypeMarchandise'],
                 'nom_marchandise' => $march['nom_marchandise'],
                 'pese' => $pese,
-                'poids' => $pese ? $pesage_data[$march['idTypeMarchandise']]['poids'] : null
+                'poids' => $pese ? floatval($march['poids']) : 0
             ];
             
             if ($pese) {
@@ -311,6 +269,7 @@ try {
                     mcc.idChargement,
                     mcc.idTypeMarchandise,
                     tm.nom as nom_marchandise,
+                    mcc.poids,
                     mcc.note,
                     mcc.date_ajout
                 FROM marchandise_chargement_camion mcc
@@ -977,7 +936,7 @@ $camions_decharges_filtres = $camions_decharges_non_sortis;
                 
                 detailsPesage.forEach((detail, index) => {
                     const isPese = detail.pese;
-                    const poids = isPese ? detail.poids : 'Non pesé';
+                    const poids = isPese ? formatNumber(detail.poids) + ' kg' : 'Non pesé';
                     const peseeClass = isPese ? 'marchandise-pesee' : 'marchandise-non-pesee';
                     const statusBadge = isPese ? 
                         '<span class="bg-green-100 text-green-800 text-xs font-bold px-2 py-1 rounded ml-2">PESÉ</span>' : 
@@ -992,7 +951,7 @@ $camions_decharges_filtres = $camions_decharges_non_sortis;
                                         ${statusBadge}
                                     </p>
                                     <p class="text-sm text-gray-600 mt-1">
-                                        <span class="font-medium">Poids:</span> ${poids} kg
+                                        <span class="font-medium">Poids:</span> ${poids}
                                     </p>
                                 </div>
                             </div>
@@ -1020,6 +979,9 @@ $camions_decharges_filtres = $camions_decharges_non_sortis;
                                 <div>
                                     <p class="font-medium text-gray-800">${march.nom_marchandise}</p>
                                     ${march.note ? `<p class="text-sm text-gray-600 mt-1">${march.note}</p>` : ''}
+                                    ${march.poids && parseFloat(march.poids) > 0 ? 
+                                        `<p class="text-sm text-gray-600 mt-1"><span class="font-medium">Poids:</span> ${formatNumber(march.poids)} kg</p>` : 
+                                        ''}
                                 </div>
                                 <div class="text-right">
                                     <p class="text-xs text-gray-500">Ajouté le</p>
@@ -1070,7 +1032,7 @@ $camions_decharges_filtres = $camions_decharges_non_sortis;
         
         // Fonctions utilitaires
         function formatNumber(num) {
-            if (!num) return '0.00';
+            if (!num || isNaN(num)) return '0.00';
             return parseFloat(num).toLocaleString('fr-FR', {
                 minimumFractionDigits: 2,
                 maximumFractionDigits: 2
@@ -1078,7 +1040,7 @@ $camions_decharges_filtres = $camions_decharges_non_sortis;
         }
         
         function formatDate(dateString) {
-            if (!dateString) return 'N/A';
+            if (!dateString || dateString === '0000-00-00 00:00:00') return 'N/A';
             const date = new Date(dateString);
             return date.toLocaleDateString('fr-FR', {
                 day: '2-digit',
@@ -1088,6 +1050,27 @@ $camions_decharges_filtres = $camions_decharges_non_sortis;
                 minute: '2-digit'
             });
         }
+        
+        // Afficher un message debug dans la console
+        console.log('Camions chargés:', camionsCharges);
+        console.log('Camions déchargés:', camionsDecharges);
+        console.log('Marchandises chargement:', marchandisesCharge);
+        console.log('Marchandises déchargement:', marchandisesDecharge);
     </script>
+    <script>
+document.addEventListener('DOMContentLoaded', function() {
+    const currentPath = window.location.pathname;
+    const navLinks = document.querySelectorAll('nav a');
+    
+    navLinks.forEach(link => {
+        const linkPath = link.getAttribute('href');
+        // Vérifier si le lien correspond à la page actuelle
+        if (currentPath.includes(linkPath) && linkPath !== '../../logout.php') {
+            link.classList.add('bg-blue-100', 'text-blue-600', 'font-semibold');
+            link.classList.remove('hover:bg-gray-100');
+        }
+    });
+});
+</script>
 </body>
 </html>

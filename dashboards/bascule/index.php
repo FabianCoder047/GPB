@@ -657,5 +657,20 @@ $stats['agents_actifs'] = $stats['agents_actifs'] ?? 0;
             });
         });
     </script>
+    <script>
+document.addEventListener('DOMContentLoaded', function() {
+    const currentPath = window.location.pathname;
+    const navLinks = document.querySelectorAll('nav a');
+    
+    navLinks.forEach(link => {
+        const linkPath = link.getAttribute('href');
+        // Vérifier si le lien correspond à la page actuelle
+        if (currentPath.includes(linkPath) && linkPath !== '../../logout.php') {
+            link.classList.add('bg-blue-100', 'text-blue-600', 'font-semibold');
+            link.classList.remove('hover:bg-gray-100');
+        }
+    });
+});
+</script>
 </body>
 </html>
