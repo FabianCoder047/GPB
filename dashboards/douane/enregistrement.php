@@ -1078,15 +1078,11 @@ try {
                                 <div class="space-y-2 text-sm">
                                     <div class="flex justify-between">
                                         <span class="text-gray-600">Type:</span>
-                                        <span class="font-medium">${data.type_marchandise || 'N/A'}</span>
+                                        <span class="font-medium">${data.type_marchandise || 'Aucune marchandise'}</span>
                                     </div>
                                     <div class="flex justify-between">
-                                        <span class="text-gray-600">Poids brut:</span>
-                                        <span class="font-medium">${data.poids_brut ? data.poids_brut + ' t' : 'N/A'}</span>
-                                    </div>
-                                    <div class="flex justify-between">
-                                        <span class="text-gray-600">Destination:</span>
-                                        <span class="font-medium">${data.destination || 'N/A'}</span>
+                                        <span class="text-gray-600">Poids marchandises:</span>
+                                        <span class="font-medium">${data.poids_total_marchandises ? data.poids_total_marchandises + ' t' : 'N/A'}</span>
                                     </div>
                                 </div>
                             </div>
@@ -1105,15 +1101,6 @@ try {
                                 </div>
                             </div>
                         </div>
-                        
-                        ${data.note ? `
-                            <div class="mb-6">
-                                <h4 class="font-bold text-gray-700 mb-2"><i class="fas fa-sticky-note mr-2"></i>Notes</h4>
-                                <div class="bg-gray-50 p-4 rounded-lg">
-                                    <p class="text-gray-700">${data.note}</p>
-                                </div>
-                            </div>
-                        ` : ''}
                     `;
                 }else if (type === 'camion_sortant') {
                     content = `
@@ -1162,12 +1149,8 @@ try {
                                         <span class="font-medium">${data.type_marchandise || 'N/A'}</span>
                                     </div>
                                     <div class="flex justify-between">
-                                        <span class="text-gray-600">Poids brut:</span>
-                                        <span class="font-medium">${data.poids_brut ? data.poids_brut + ' t' : 'N/A'}</span>
-                                    </div>
-                                    <div class="flex justify-between">
-                                        <span class="text-gray-600">Destination:</span>
-                                        <span class="font-medium">${data.destination || 'N/A'}</span>
+                                        <span class="text-gray-600">Poids marchandises:</span>
+                                        <span class="font-medium">${data.poids_total_marchandises ? data.poids_total_marchandises + ' t' : 'N/A'}</span>
                                     </div>
                                 </div>
                             </div>
@@ -1186,15 +1169,6 @@ try {
                                 </div>
                             </div>
                         </div>
-                        
-                        ${data.note ? `
-                            <div class="mb-6">
-                                <h4 class="font-bold text-gray-700 mb-2"><i class="fas fa-sticky-note mr-2"></i>Notes</h4>
-                                <div class="bg-gray-50 p-4 rounded-lg">
-                                    <p class="text-gray-700">${data.note}</p>
-                                </div>
-                            </div>
-                        ` : ''}
                     `;
                 }if (type === 'bateau_entrant') {
                     content = `

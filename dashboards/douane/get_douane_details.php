@@ -24,10 +24,14 @@ try {
     
     switch ($type) {
         case 'camion_entrant':
-            $query = "SELECT ce.*, tc.nom as type_camion
+            $query = "SELECT ce.*, tc.nom as type_camion, 
+                             p.poids_total_marchandises, p.date_pesage,
+                             tm.nom as type_marchandise, mp.poids
                       FROM camions_entrants ce
                       LEFT JOIN type_camion tc ON ce.idTypeCamion = tc.id
-                    --   LEFT JOIN type_marchandise tm ON ce.id_type_marchandise = tm.id
+                      LEFT JOIN pesages p ON ce.idEntree = p.idEntree
+                      LEFT JOIN marchandises_pesage mp ON p.idPesage = mp.idPesage
+                      LEFT JOIN type_marchandise tm ON mp.idTypeMarchandise = tm.id
                       WHERE ce.idEntree = ?";
             $stmt = $conn->prepare($query);
             $stmt->bind_param("i", $id);
