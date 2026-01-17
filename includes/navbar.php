@@ -53,6 +53,10 @@ $role = $user['role'] ?? null;
             <?php endif; ?>
 
             <?php if ($role === 'autorite'): ?>
+                <a href="index.php"
+                   class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-100">
+                    🏠 <span>Tableau de bord</span>
+                </a>
                 <a href="rapports.php"
                    class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-100">
                     📄 <span>Rapports</span>
