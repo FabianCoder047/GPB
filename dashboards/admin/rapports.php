@@ -1098,11 +1098,11 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
                         
                         <?php if (!empty($resultats)): ?>
                             <div class="flex space-x-2">
-                                <a href="historique.php?<?php echo http_build_query($_GET); ?>&export=excel" 
+                                <a href="rapports.php?<?php echo http_build_query($_GET); ?>&export=excel" 
                                    class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-6 rounded-lg">
                                     <i class="fas fa-file-excel mr-2"></i>Exporter Excel
                                 </a>
-                                <a href="historique.php?<?php echo http_build_query($_GET); ?>&export=pdf" 
+                                <a href="rapports.php?<?php echo http_build_query($_GET); ?>&export=pdf" 
                                    class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-6 rounded-lg">
                                     <i class="fas fa-file-pdf mr-2"></i>Exporter PDF
                                 </a>
