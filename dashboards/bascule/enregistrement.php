@@ -24,26 +24,45 @@ $selected_camion = null;
 $selected_camion_id = null;
 $pesage_existant = null;
 $marchandises = [];
+$marchandises_chargement = []; // Pour les marchandises du chargement (sortie)
 
 // Recherche par immatriculation
 $search_immat = $_GET['search'] ?? '';
 
-// Récupérer le mode (view ou edit)
+// Récupérer le mode (view ou edit) et l'onglet actif
 $mode = $_GET['mode'] ?? null;
+$onglet_actif = $_GET['onglet'] ?? 'entree'; // 'entree' ou 'sortie'
 
 // Traitement de la sélection d'un camion
 if (isset($_GET['select']) && is_numeric($_GET['select'])) {
     $selected_camion_id = $_GET['select'];
     
     try {
-        // Récupérer les informations du camion
-        $stmt = $conn->prepare("
-            SELECT ce.*, tc.nom as type_camion, p.nom as port 
-            FROM camions_entrants ce
-            LEFT JOIN type_camion tc ON ce.idTypeCamion = tc.id
-            LEFT JOIN port p ON ce.idPort = p.id
-            WHERE ce.idEntree = ?
-        ");
+        if ($onglet_actif === 'sortie') {
+            // Récupérer les informations du camion pour le pesage sortie
+            $stmt = $conn->prepare("
+                SELECT ce.*, tc.nom as type_camion, p.nom as port, 
+                       cc.idChargement, cc.date_chargement,
+                       EXISTS(SELECT 1 FROM marchandise_chargement_camion mcc 
+                              WHERE mcc.idChargement = cc.idChargement AND mcc.poids = 0) as a_marchandises_non_pesees
+                FROM chargement_camions cc
+                LEFT JOIN camions_entrants ce ON cc.idEntree = ce.idEntree
+                LEFT JOIN type_camion tc ON ce.idTypeCamion = tc.id
+                LEFT JOIN port p ON ce.idPort = p.id
+                WHERE ce.idEntree = ?
+                LIMIT 1
+            ");
+        } else {
+            // Récupérer les informations du camion pour le pesage entrée
+            $stmt = $conn->prepare("
+                SELECT ce.*, tc.nom as type_camion, p.nom as port 
+                FROM camions_entrants ce
+                LEFT JOIN type_camion tc ON ce.idTypeCamion = tc.id
+                LEFT JOIN port p ON ce.idPort = p.id
+                WHERE ce.idEntree = ?
+            ");
+        }
+        
         $stmt->bind_param("i", $selected_camion_id);
         $stmt->execute();
         $result = $stmt->get_result();
@@ -74,6 +93,35 @@ if (isset($_GET['select']) && is_numeric($_GET['select'])) {
                 $marchandises = $marchandises_result->fetch_all(MYSQLI_ASSOC);
             }
             
+            // Récupérer les marchandises du chargement pour le pesage sortie
+            if ($onglet_actif === 'sortie' && isset($selected_camion['idChargement'])) {
+                $stmt = $conn->prepare("
+                    SELECT mcc.*, tm.nom as type_marchandise
+                    FROM marchandise_chargement_camion mcc
+                    LEFT JOIN type_marchandise tm ON mcc.idTypeMarchandise = tm.id
+                    WHERE mcc.idChargement = ?
+                    ORDER BY mcc.date_ajout DESC
+                ");
+                $stmt->bind_param("i", $selected_camion['idChargement']);
+                $stmt->execute();
+                $marchandises_chargement_result = $stmt->get_result();
+                $marchandises_chargement = $marchandises_chargement_result->fetch_all(MYSQLI_ASSOC);
+                
+                // Si on a des marchandises de chargement mais pas encore de pesage,
+                // on pré-remplit les marchandises avec celles du chargement
+                if (empty($marchandises) && !empty($marchandises_chargement)) {
+                    foreach ($marchandises_chargement as $marchandise) {
+                        $marchandises[] = [
+                            'idTypeMarchandise' => $marchandise['idTypeMarchandise'],
+                            'type_marchandise' => $marchandise['type_marchandise'],
+                            'poids' => $marchandise['poids'], // Initialement 0 pour les marchandises non pesées
+                            'note' => $marchandise['note'] ?? '',
+                            'from_chargement' => true
+                        ];
+                    }
+                }
+            }
+            
             // Si le mode n'est pas spécifié, on regarde si le camion a un pesage
             // Si oui, on met 'view' par défaut, sinon 'edit'
             if ($mode === null) {
@@ -93,6 +141,7 @@ if (isset($_GET['select']) && is_numeric($_GET['select'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $selected_camion_id = $_POST['idEntree'] ?? null;
     $mode = $_POST['mode'] ?? 'edit';
+    $onglet_actif = $_POST['onglet'] ?? 'entree';
     
     if ($selected_camion_id && $_POST['action'] === 'peser') {
         try {
@@ -170,6 +219,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         ");
                         $stmt->bind_param("iids", $idPesage, $type_id, $poids, $note);
                         $stmt->execute();
+                        
+                        // Si c'est un pesage de sortie, mettre à jour la table marchandise_chargement_camion
+                        if ($onglet_actif === 'sortie' && isset($selected_camion['idChargement'])) {
+                            // Mettre à jour le poids dans le chargement
+                            $stmt_update = $conn->prepare("
+                                UPDATE marchandise_chargement_camion 
+                                SET poids = ?, date_ajout = NOW()
+                                WHERE idChargement = ? AND idTypeMarchandise = ?
+                            ");
+                            $stmt_update->bind_param("dii", $poids, $selected_camion['idChargement'], $type_id);
+                            $stmt_update->execute();
+                        }
                     }
                 }
             }
@@ -178,7 +239,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             
             // Rediriger en mode view après enregistrement
             if ($selected_camion_id) {
-                header("Location: enregistrement.php?select=" . $selected_camion_id . "&mode=view");
+                header("Location: enregistrement.php?select=" . $selected_camion_id . "&mode=view&onglet=" . $onglet_actif);
                 exit();
             }
             
@@ -189,58 +250,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 }
 
 // Récupérer la liste des camions avec filtre de recherche
-$camions = [];
+$camions_entree = [];
+$camions_sortie = [];
 $types_marchandises = [];
 
-// Récupérer les camions chargés (pour la nouvelle section)
-$camions_charges_non_peses = [];
-$camions_charges_peses = [];
+// Récupérer les types de marchandises
+$query_types_marchandises = "SELECT id, nom FROM type_marchandise ORDER BY nom";
+$result_types = $conn->query($query_types_marchandises);
+if ($result_types && $result_types->num_rows > 0) {
+    while ($row = $result_types->fetch_assoc()) {
+        $types_marchandises[] = $row;
+    }
+}
 
-try {
-    // Récupérer les types de marchandises
-    $result = $conn->query("SELECT * FROM type_marchandise ORDER BY nom");
-    $types_marchandises = $result->fetch_all(MYSQLI_ASSOC);
-    
-    // REQUÊTE CORRIGÉE : Récupérer les camions chargés séparément
-    $query_charges = "
-        SELECT ce.*, tc.nom as type_camion, p.nom as port, 
-               ps.poids_total_marchandises, ps.surcharge, ps.date_pesage,
-               ps.idPesage
-        FROM camions_entrants ce
-        LEFT JOIN type_camion tc ON ce.idTypeCamion = tc.id
-        LEFT JOIN port p ON ce.idPort = p.id
-        LEFT JOIN pesages ps ON ce.idEntree = ps.idEntree
-        WHERE LOWER(ce.etat) = 'chargé'
-    ";
-    
-    if (!empty($search_immat)) {
-        $query_charges .= " AND ce.immatriculation LIKE ?";
-    }
-    
-    $query_charges .= " ORDER BY ce.date_entree DESC LIMIT 20";
+if ($onglet_actif === 'sortie') {
+    // Récupérer les camions pour le pesage sortie (avec chargement mais non pesés)
+    $query_camions_avec_chargement = '
+    SELECT DISTINCT ce.*, tc.nom as type_camion, p.nom as port, 
+           cc.idChargement, cc.date_chargement,
+           ps.poids_total_marchandises, ps.surcharge, ps.date_pesage,
+           EXISTS(SELECT 1 FROM marchandise_chargement_camion mcc 
+                  WHERE mcc.idChargement = cc.idChargement AND mcc.poids = 0) as a_marchandises_non_pesees
+    FROM chargement_camions cc
+    LEFT JOIN camions_entrants ce ON cc.idEntree = ce.idEntree
+    LEFT JOIN type_camion tc ON ce.idTypeCamion = tc.id
+    LEFT JOIN port p ON ce.idPort = p.id
+    LEFT JOIN pesages ps ON ce.idEntree = ps.idEntree
+    WHERE EXISTS (
+        SELECT 1 FROM marchandise_chargement_camion mcc 
+        WHERE mcc.idChargement = cc.idChargement AND mcc.poids = 0
+    )
+    ';
     
     if (!empty($search_immat)) {
-        $stmt = $conn->prepare($query_charges);
-        $stmt->bind_param("s", '%' . $search_immat . '%');
-        $stmt->execute();
-        $result_charges = $stmt->get_result();
-    } else {
-        $result_charges = $conn->query($query_charges);
+        $query_camions_avec_chargement .= " AND ce.immatriculation LIKE '%" . $conn->real_escape_string($search_immat) . "%'";
     }
     
-    $camions_charges = $result_charges->fetch_all(MYSQLI_ASSOC);
+    $query_camions_avec_chargement .= " ORDER BY cc.date_chargement DESC LIMIT 50";
     
-    // Séparer les camions pesés et non pesés
-    foreach ($camions_charges as $camion) {
-        // Vérifier si un pesage existe (idPesage n'est pas NULL et date_pesage est valide)
-        if (!empty($camion['idPesage']) && !empty($camion['date_pesage']) && $camion['date_pesage'] != '0000-00-00 00:00:00') {
-            $camions_charges_peses[] = $camion;
-        } else {
-            $camions_charges_non_peses[] = $camion;
+    $result_chargement = $conn->query($query_camions_avec_chargement);
+    if ($result_chargement && $result_chargement->num_rows > 0) {
+        while ($row = $result_chargement->fetch_assoc()) {
+            $camions_sortie[] = $row;
         }
     }
-    
-    // Récupérer aussi tous les camions pour la première liste (tous les états)
+} else {
+    // Récupérer les camions pour le pesage entrée
     $query_all = "
         SELECT ce.*, tc.nom as type_camion, p.nom as port, 
                ps.poids_total_marchandises, ps.surcharge, ps.date_pesage
@@ -271,10 +326,7 @@ try {
         $result = $conn->query($query_all);
     }
     
-    $camions = $result->fetch_all(MYSQLI_ASSOC);
-    
-} catch (Exception $e) {
-    $error = "Erreur lors du chargement des données: " . $e->getMessage();
+    $camions_entree = $result->fetch_all(MYSQLI_ASSOC);
 }
 
 // Déterminer si le camion sélectionné est vide
@@ -353,6 +405,73 @@ if ($mode == 'view' && $pesage_existant) {
             background-color: #fef3c7;
             color: #92400e;
         }
+        
+        .tab-button {
+            padding: 0.75rem 1.5rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            border: none;
+            background: none;
+            cursor: pointer;
+            position: relative;
+        }
+        
+        .tab-button.active {
+            color: #3b82f6;
+        }
+        
+        .tab-button.active::after {
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background-color: #3b82f6;
+        }
+        
+        .tab-button:not(.active) {
+            color: #6b7280;
+        }
+        
+        .tab-button:not(.active):hover {
+            color: #4b5563;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .info-bulle {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .info-bulle .info-text {
+            visibility: hidden;
+            width: 200px;
+            background-color: #555;
+            color: #fff;
+            text-align: center;
+            border-radius: 6px;
+            padding: 5px;
+            position: absolute;
+            z-index: 1;
+            bottom: 125%;
+            left: 50%;
+            margin-left: -100px;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        
+        .info-bulle:hover .info-text {
+            visibility: visible;
+            opacity: 1;
+        }
     </style>
 </head>
 <body class="bg-gradient-to-br from-blue-50 to-gray-100">
@@ -372,6 +491,34 @@ if ($mode == 'view' && $pesage_existant) {
             </div>
         <?php endif; ?>
         
+        <!-- Onglets -->
+        <div class="bg-white shadow rounded-t-lg mb-2">
+            <div class="flex border-b">
+                <button type="button" 
+                        data-tab="entree" 
+                        class="tab-button <?php echo $onglet_actif === 'entree' ? 'active' : ''; ?>">
+                    <i class="fas fa-sign-in-alt mr-2"></i>Pesage Entrée
+                    <span class="ml-2 px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-800">
+                        <?php echo count($camions_entree); ?>
+                    </span>
+                </button>
+                <button type="button" 
+                        data-tab="sortie" 
+                        class="tab-button <?php echo $onglet_actif === 'sortie' ? 'active' : ''; ?>">
+                    <i class="fas fa-sign-out-alt mr-2"></i>Pesage Sortie
+                    <span class="ml-2 px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">
+                        <?php echo count($camions_sortie); ?>
+                    </span>
+                    <?php if ($onglet_actif === 'sortie'): ?>
+                        <span class="info-bulle ml-1">
+                            <i class="fas fa-info-circle text-blue-500"></i>
+                            <span class="info-text">Camions avec marchandises à peser (poids=0)</span>
+                        </span>
+                    <?php endif; ?>
+                </button>
+            </div>
+        </div>
+        
         <!-- Formulaire de recherche global -->
         <div class="bg-white shadow rounded-lg p-4 mb-6">
             <div class="flex justify-between items-center">
@@ -380,6 +527,7 @@ if ($mode == 'view' && $pesage_existant) {
                 </h2>
                 
                 <form method="GET" class="flex items-center space-x-2">
+                    <input type="hidden" name="onglet" value="<?php echo $onglet_actif; ?>" id="onglet-input">
                     <div class="relative">
                         <input type="text" name="search" 
                                value="<?php echo safe_html($search_immat); ?>"
@@ -391,7 +539,7 @@ if ($mode == 'view' && $pesage_existant) {
                         Rechercher
                     </button>
                     <?php if (!empty($search_immat)): ?>
-                        <a href="enregistrement.php" class="text-gray-600 hover:text-gray-800 p-2">
+                        <a href="enregistrement.php?onglet=<?php echo $onglet_actif; ?>" class="text-gray-600 hover:text-gray-800 p-2">
                             <i class="fas fa-times"></i>
                         </a>
                     <?php endif; ?>
@@ -402,13 +550,19 @@ if ($mode == 'view' && $pesage_existant) {
         <!-- Grille principale avec les deux sections côte à côte -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 grid-cols-1-2 mb-6">
             
-            <!-- Section 1: Liste des camions entrants -->
+            <!-- Section 1: Liste des camions -->
             <div class="bg-white shadow rounded-lg">
                 <div class="p-4 border-b">
                     <h2 class="text-lg font-bold text-gray-800">
-                        <i class="fas fa-truck mr-2"></i>Camions Entrants
+                        <i class="fas fa-truck mr-2"></i>
+                        <?php echo $onglet_actif === 'entree' ? 'Camions Entrants' : 'Camions à Peser en Sortie'; ?>
                     </h2>
-                    <p class="text-sm text-gray-600"><?php echo count($camions); ?> camions trouvés</p>
+                    <p class="text-sm text-gray-600">
+                        <?php echo $onglet_actif === 'entree' ? count($camions_entree) : count($camions_sortie); ?> camions trouvés
+                        <?php if ($onglet_actif === 'sortie'): ?>
+                            <span class="text-xs text-gray-500">(avec marchandises non pesées)</span>
+                        <?php endif; ?>
+                    </p>
                 </div>
                 
                 <div class="scrollable-table">
@@ -417,26 +571,34 @@ if ($mode == 'view' && $pesage_existant) {
                             <tr>
                                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Immatriculation</th>
                                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Chauffeur</th>
-                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">État</th>
                                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Pesage</th>
                                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
                             </tr>
                         </thead>
                         <tbody class="bg-white divide-y divide-gray-200">
-                            <?php foreach ($camions as $camion): ?>
+                            <?php 
+                            $camions_a_afficher = $onglet_actif === 'entree' ? $camions_entree : $camions_sortie;
+                            foreach ($camions_a_afficher as $camion): 
+                            ?>
                             <tr class="hover:bg-gray-50 transition-colors duration-150 
                                 <?php echo $selected_camion_id == $camion['idEntree'] ? 'bg-blue-50 border-l-4 border-blue-500' : ''; ?>">
                                 <td class="px-4 py-3 whitespace-nowrap">
                                     <div class="flex items-center">
-                                        <div class="flex-shrink-0 h-8 w-8 bg-blue-100 rounded-full flex items-center justify-center">
-                                            <i class="fas fa-truck text-blue-600 text-sm"></i>
+                                        <div class="flex-shrink-0 h-8 w-8 <?php echo $onglet_actif === 'entree' ? 'bg-blue-100' : 'bg-green-100'; ?> rounded-full flex items-center justify-center">
+                                            <i class="fas fa-truck <?php echo $onglet_actif === 'entree' ? 'text-blue-600' : 'text-green-600'; ?> text-sm"></i>
                                         </div>
                                         <div class="ml-3">
                                             <div class="text-sm font-medium text-gray-900">
                                                 <?php echo safe_html($camion['immatriculation']); ?>
                                             </div>
                                             <div class="text-xs text-gray-500">
-                                                <?php echo date('d/m/Y H:i', strtotime($camion['date_entree'] ?? '')); ?> - 
+                                                <?php 
+                                                if ($onglet_actif === 'entree') {
+                                                    echo date('d/m/Y H:i', strtotime($camion['date_entree'] ?? '')); 
+                                                } else {
+                                                    echo date('d/m/Y H:i', strtotime($camion['date_chargement'] ?? '')); 
+                                                }
+                                                ?> - 
                                                 <?php echo safe_html($camion['type_camion']); ?>
                                             </div>
                                         </div>
@@ -445,50 +607,110 @@ if ($mode == 'view' && $pesage_existant) {
                                 <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
                                     <?php echo safe_html(($camion['prenom_chauffeur'] ?? '') . ' ' . ($camion['nom_chauffeur'] ?? '')); ?>
                                 </td>
+                                
                                 <td class="px-4 py-3 whitespace-nowrap">
-                                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
-                                        <?php echo ($camion['etat'] ?? '') == 'Chargé' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'; ?>">
-                                        <?php echo safe_html($camion['etat'] ?? '-'); ?>
-                                    </span>
-                                </td>
-                                <td class="px-4 py-3 whitespace-nowrap">
-                                    <?php if ($camion['date_pesage'] && $camion['date_pesage'] != '0000-00-00 00:00:00'): ?>
-                                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
-                                            <?php echo $camion['surcharge'] ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'; ?>">
-                                            <i class="fas fa-weight-scale mr-1"></i>
-                                            <?php echo $camion['surcharge'] ? 'Surcharge' : 'Pesé'; ?>
-                                        </span>
+                                    <?php if ($onglet_actif === 'sortie'): ?>
+                                        <?php 
+                                        // Déterminer l'état du pesage pour l'onglet sortie
+                                        $hasNonPesee = isset($camion['a_marchandises_non_pesees']) && $camion['a_marchandises_non_pesees'];
+                                        $hasPesage = isset($camion['date_pesage']) && $camion['date_pesage'] != '0000-00-00 00:00:00';
+                                        
+                                        if (!$hasPesage && $hasNonPesee): ?>
+                                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
+                                                <i class="fas fa-exclamation-triangle mr-1"></i>
+                                                Non Pesé
+                                            </span>
+                                        <?php elseif ($hasPesage && $hasNonPesee): ?>
+                                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">
+                                                <i class="fas fa-weight-scale mr-1"></i>
+                                                Partiellement pesé
+                                            </span>
+                                        <?php elseif ($hasPesage && !$hasNonPesee): ?>
+                                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+                                                <?php echo $camion['surcharge'] ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'; ?>">
+                                                <i class="fas fa-check-circle mr-1"></i>
+                                                <?php echo $camion['surcharge'] ? 'Surcharge' : 'Pesé'; ?>
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
+                                                Inconnu
+                                            </span>
+                                        <?php endif; ?>
                                     <?php else: ?>
-                                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">
-                                            À peser
-                                        </span>
+                                        <!-- Onglet entrée -->
+                                        <?php if ($camion['date_pesage'] && $camion['date_pesage'] != '0000-00-00 00:00:00'): ?>
+                                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+                                                <?php echo $camion['surcharge'] ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'; ?>">
+                                                <i class="fas fa-weight-scale mr-1"></i>
+                                                <?php echo $camion['surcharge'] ? 'Surcharge' : 'Pesé'; ?>
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">
+                                                À peser
+                                            </span>
+                                        <?php endif; ?>
                                     <?php endif; ?>
                                 </td>
                                 <td class="px-4 py-3 whitespace-nowrap text-sm">
-                                    <?php if ($camion['date_pesage'] && $camion['date_pesage'] != '0000-00-00 00:00:00'): ?>
-                                        <!-- Camion déjà pesé : deux boutons alignés horizontalement -->
-                                        <div class="flex flex-row space-x-2">
-                                            <a href="enregistrement.php?select=<?php echo $camion['idEntree']; ?>&mode=view<?php echo !empty($search_immat) ? '&search=' . urlencode($search_immat) : ''; ?>" 
+                                    <?php if ($onglet_actif === 'sortie'): ?>
+                                        <?php 
+                                        $hasNonPesee = isset($camion['a_marchandises_non_pesees']) && $camion['a_marchandises_non_pesees'];
+                                        $hasPesage = isset($camion['date_pesage']) && $camion['date_pesage'] != '0000-00-00 00:00:00';
+                                        ?>
+                                        <?php if (!$hasPesage && $hasNonPesee): ?>
+                                            <!-- Pas de pesage et marchandises non pesées : bouton Peser -->
+                                            <a href="enregistrement.php?select=<?php echo $camion['idEntree']; ?>&mode=edit&onglet=<?php echo $onglet_actif; ?><?php echo !empty($search_immat) ? '&search=' . urlencode($search_immat) : ''; ?>" 
                                                class="inline-flex items-center px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-full text-sm font-medium">
-                                                <i class="fas fa-eye mr-1"></i>Détails
+                                                <i class="fas fa-weight-scale mr-1"></i>Peser
                                             </a>
-                                            <a href="enregistrement.php?select=<?php echo $camion['idEntree']; ?>&mode=edit<?php echo !empty($search_immat) ? '&search=' . urlencode($search_immat) : ''; ?>" 
-                                               class="inline-flex items-center px-3 py-1 bg-yellow-100 hover:bg-yellow-200 text-yellow-800 rounded-full text-sm font-medium">
-                                                <i class="fas fa-edit mr-1"></i>Modifier
+                                        <?php elseif ($hasPesage && $hasNonPesee): ?>
+                                            <!-- Pesage existant mais encore des marchandises non pesées -->
+                                            <a href="enregistrement.php?select=<?php echo $camion['idEntree']; ?>&mode=edit&onglet=<?php echo $onglet_actif; ?><?php echo !empty($search_immat) ? '&search=' . urlencode($search_immat) : ''; ?>" 
+                                               class="inline-flex items-center px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-full text-sm font-medium">
+                                                <i class="fas fa-weight-scale mr-1"></i>Peser
                                             </a>
-                                        </div>
+                                        <?php elseif ($hasPesage && !$hasNonPesee): ?>
+                                            <!-- Pesage complet : boutons Détails et Modifier -->
+                                            <div class="flex flex-row space-x-2">
+                                                <a href="enregistrement.php?select=<?php echo $camion['idEntree']; ?>&mode=view&onglet=<?php echo $onglet_actif; ?><?php echo !empty($search_immat) ? '&search=' . urlencode($search_immat) : ''; ?>" 
+                                                   class="inline-flex items-center px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-full text-sm font-medium">
+                                                    <i class="fas fa-eye mr-1"></i>Détails
+                                                </a>
+                                                <a href="enregistrement.php?select=<?php echo $camion['idEntree']; ?>&mode=edit&onglet=<?php echo $onglet_actif; ?><?php echo !empty($search_immat) ? '&search=' . urlencode($search_immat) : ''; ?>" 
+                                                   class="inline-flex items-center px-3 py-1 bg-yellow-100 hover:bg-yellow-200 text-yellow-800 rounded-full text-sm font-medium">
+                                                    <i class="fas fa-edit mr-1"></i>Modifier
+                                                </a>
+                                            </div>
+                                        <?php else: ?>
+                                            <span class="text-gray-400 text-sm">Aucune action</span>
+                                        <?php endif; ?>
                                     <?php else: ?>
-                                        <!-- Camion non pesé : un bouton -->
-                                        <a href="enregistrement.php?select=<?php echo $camion['idEntree']; ?><?php echo !empty($search_immat) ? '&search=' . urlencode($search_immat) : ''; ?>" 
-                                           class="inline-flex items-center px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-full text-sm font-medium">
-                                            <i class="fas fa-weight-scale mr-1"></i>Peser
-                                        </a>
+                                        <!-- Onglet entrée : code existant -->
+                                        <?php if ($camion['date_pesage'] && $camion['date_pesage'] != '0000-00-00 00:00:00'): ?>
+                                            <!-- Camion déjà pesé : deux boutons alignés horizontalement -->
+                                            <div class="flex flex-row space-x-2">
+                                                <a href="enregistrement.php?select=<?php echo $camion['idEntree']; ?>&mode=view&onglet=<?php echo $onglet_actif; ?><?php echo !empty($search_immat) ? '&search=' . urlencode($search_immat) : ''; ?>" 
+                                                   class="inline-flex items-center px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-full text-sm font-medium">
+                                                    <i class="fas fa-eye mr-1"></i>Détails
+                                                </a>
+                                                <a href="enregistrement.php?select=<?php echo $camion['idEntree']; ?>&mode=edit&onglet=<?php echo $onglet_actif; ?><?php echo !empty($search_immat) ? '&search=' . urlencode($search_immat) : ''; ?>" 
+                                                   class="inline-flex items-center px-3 py-1 bg-yellow-100 hover:bg-yellow-200 text-yellow-800 rounded-full text-sm font-medium">
+                                                    <i class="fas fa-edit mr-1"></i>Modifier
+                                                </a>
+                                            </div>
+                                        <?php else: ?>
+                                            <!-- Camion non pesé : un bouton -->
+                                            <a href="enregistrement.php?select=<?php echo $camion['idEntree']; ?>&onglet=<?php echo $onglet_actif; ?><?php echo !empty($search_immat) ? '&search=' . urlencode($search_immat) : ''; ?>" 
+                                               class="inline-flex items-center px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-full text-sm font-medium">
+                                                <i class="fas fa-weight-scale mr-1"></i>Peser
+                                            </a>
+                                        <?php endif; ?>
                                     <?php endif; ?>
                                 </td>
                             </tr>
                             <?php endforeach; ?>
                             
-                            <?php if (empty($camions)): ?>
+                            <?php if (empty($camions_a_afficher)): ?>
                             <tr>
                                 <td colspan="5" class="px-4 py-8 text-center text-sm text-gray-500">
                                     <i class="fas fa-truck-loading text-3xl text-gray-300 mb-2 block"></i>
@@ -510,6 +732,9 @@ if ($mode == 'view' && $pesage_existant) {
                             <h2 class="text-lg font-bold text-gray-800">
                                 <i class="fas fa-weight mr-2"></i>
                                 <?php echo ($mode == 'view') ? 'Consultation du Pesage' : 'Pesage du Camion'; ?>
+                                <span class="ml-2 text-sm font-normal <?php echo $onglet_actif === 'entree' ? 'text-blue-600' : 'text-green-600'; ?>">
+                                    (<?php echo $onglet_actif === 'entree' ? 'Entrée' : 'Sortie'; ?>)
+                                </span>
                             </h2>
                             <div class="flex items-center space-x-2 mt-1">
                                 <span class="text-sm font-medium text-gray-900">
@@ -528,6 +753,10 @@ if ($mode == 'view' && $pesage_existant) {
                             </div>
                         </div>
                         <div class="flex items-center space-x-2">
+                            <span class="px-2 py-1 text-xs font-semibold rounded-full <?php echo $onglet_actif === 'entree' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'; ?>">
+                                <i class="fas <?php echo $onglet_actif === 'entree' ? 'fa-sign-in-alt' : 'fa-sign-out-alt'; ?> mr-1"></i>
+                                <?php echo $onglet_actif === 'entree' ? 'Entrée' : 'Sortie'; ?>
+                            </span>
                             <?php if ($mode == 'view'): ?>
                                 <span class="bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded">
                                     <i class="fas fa-eye mr-1"></i>Mode consultation
@@ -537,7 +766,7 @@ if ($mode == 'view' && $pesage_existant) {
                                     <i class="fas fa-edit mr-1"></i>Mode édition
                                 </span>
                             <?php endif; ?>
-                            <a href="enregistrement.php<?php echo !empty($search_immat) ? '?search=' . urlencode($search_immat) : ''; ?>" 
+                            <a href="enregistrement.php?onglet=<?php echo $onglet_actif; ?><?php echo !empty($search_immat) ? '&search=' . urlencode($search_immat) : ''; ?>" 
                                class="text-gray-400 hover:text-gray-600 p-2">
                                 <i class="fas fa-times text-lg"></i>
                             </a>
@@ -550,6 +779,10 @@ if ($mode == 'view' && $pesage_existant) {
                         <input type="hidden" name="action" value="peser">
                         <input type="hidden" name="idEntree" value="<?php echo $selected_camion_id; ?>">
                         <input type="hidden" name="mode" value="<?php echo $mode; ?>">
+                        <input type="hidden" name="onglet" value="<?php echo $onglet_actif; ?>">
+                        <?php if ($onglet_actif === 'sortie' && isset($selected_camion['idChargement'])): ?>
+                            <input type="hidden" name="idChargement" value="<?php echo $selected_camion['idChargement']; ?>">
+                        <?php endif; ?>
                         <input type="hidden" id="etat_camion" value="<?php echo safe_html($selected_camion['etat'] ?? ''); ?>">
                         <?php if ($pesage_existant): ?>
                             <input type="hidden" name="idPesage" value="<?php echo $pesage_existant['idPesage']; ?>">
@@ -637,6 +870,18 @@ if ($mode == 'view' && $pesage_existant) {
                                 <?php endif; ?>
                             </div>
                             
+                            <?php if ($onglet_actif === 'sortie' && !empty($marchandises_chargement)): ?>
+                                <div class="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                                    <div class="flex items-center">
+                                        <i class="fas fa-info-circle text-blue-600 mr-2"></i>
+                                        <p class="text-sm text-blue-800">
+                                            Ce camion a <?php echo count($marchandises_chargement); ?> marchandise(s) à peser. 
+                                            Veuillez saisir le poids réel de chaque marchandise ci-dessous.
+                                        </p>
+                                    </div>
+                                </div>
+                            <?php endif; ?>
+                            
                             <div id="marchandisesContainer" class="space-y-3 max-h-64 overflow-y-auto p-1">
                                 <?php if (!empty($marchandises)): ?>
                                     <?php foreach ($marchandises as $index => $marchandise): ?>
@@ -675,6 +920,7 @@ if ($mode == 'view' && $pesage_existant) {
                                                        step="0.01" min="0.01" value="<?php echo safe_html($marchandise['poids']); ?>"
                                                        class="marchandise-poids w-full px-2 py-1 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500" 
                                                        <?php echo ($mode == 'view') ? 'readonly' : ''; ?>
+                                                       placeholder="Saisir le poids"
                                                        required>
                                             </div>
                                         </div>
@@ -689,7 +935,13 @@ if ($mode == 'view' && $pesage_existant) {
                                 <?php else: ?>
                                     <div id="noMarchandises" class="text-center py-6 text-gray-400 border-2 border-dashed rounded-lg">
                                         <i class="fas fa-box-open text-xl mb-1"></i>
-                                        <p class="text-sm">Cliquez sur "Ajouter" pour commencer</p>
+                                        <p class="text-sm">
+                                            <?php if ($onglet_actif === 'entree'): ?>
+                                                Cliquez sur "Ajouter" pour commencer
+                                            <?php else: ?>
+                                                Aucune marchandise à peser pour ce camion
+                                            <?php endif; ?>
+                                        </p>
                                     </div>
                                 <?php endif; ?>
                             </div>
@@ -773,7 +1025,7 @@ if ($mode == 'view' && $pesage_existant) {
                         <div class="flex justify-end space-x-3">
                             <?php if ($mode == 'view' && $pesage_existant): ?>
                                 <!-- Mode consultation : bouton Modifier -->
-                                <a href="enregistrement.php?select=<?php echo $selected_camion_id; ?>&mode=edit<?php echo !empty($search_immat) ? '&search=' . urlencode($search_immat) : ''; ?>" 
+                                <a href="enregistrement.php?select=<?php echo $selected_camion_id; ?>&mode=edit&onglet=<?php echo $onglet_actif; ?><?php echo !empty($search_immat) ? '&search=' . urlencode($search_immat) : ''; ?>" 
                                    class="bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 px-4 rounded-lg text-sm">
                                     <i class="fas fa-edit mr-1"></i>Modifier le pesage
                                 </a>
@@ -785,7 +1037,7 @@ if ($mode == 'view' && $pesage_existant) {
                                 </button>
                                 <button type="submit" 
                                         class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg text-sm">
-                                    <i class="fas fa-save mr-1"></i>Enregistrer
+                                    <i class="fas fa-save mr-1"></i>Enregistrer le pesage
                                 </button>
                             <?php endif; ?>
                         </div>
@@ -823,193 +1075,6 @@ if ($mode == 'view' && $pesage_existant) {
             </div>
             <?php endif; ?>
         </div>
-        
-        <!-- NOUVELLE SECTION : Camions récemment chargés -->
-        <div class="mt-8">
-            <h2 class="text-lg font-bold text-gray-800 mb-4">
-                <i class="fas fa-truck-loading mr-2"></i>Camions Récemment Chargés
-            </h2>
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                
-                <!-- Section 1: Camions chargés à peser -->
-                <div class="bg-white shadow rounded-lg">
-                    <div class="p-4 border-b">
-                        <h3 class="text-md font-bold text-gray-800">
-                            <i class="fas fa-clock mr-2"></i>À Peser (Chargés)
-                        </h3>
-                        <p class="text-sm text-gray-600">Camions chargés en attente de pesage</p>
-                    </div>
-                    <div class="scrollable-table-small">
-                        <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="sticky-header bg-gray-50">
-                                <tr>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Immatriculation</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Chauffeur</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date Entrée</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
-                                </tr>
-                            </thead>
-                            <tbody class="bg-white divide-y divide-gray-200">
-                                <?php if (!empty($camions_charges_non_peses)): ?>
-                                    <?php foreach ($camions_charges_non_peses as $camion): ?>
-                                    <tr class="hover:bg-gray-50 transition-colors duration-150">
-                                        <td class="px-4 py-3 whitespace-nowrap">
-                                            <div class="flex items-center">
-                                                <div class="flex-shrink-0 h-8 w-8 bg-blue-100 rounded-full flex items-center justify-center">
-                                                    <i class="fas fa-truck text-blue-600 text-sm"></i>
-                                                </div>
-                                                <div class="ml-3">
-                                                    <div class="text-sm font-medium text-gray-900">
-                                                        <?php echo safe_html($camion['immatriculation']); ?>
-                                                    </div>
-                                                    <div class="text-xs text-gray-500">
-                                                        <?php echo safe_html($camion['type_camion'] ?? ''); ?>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </td>
-                                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
-                                            <?php echo safe_html(($camion['prenom_chauffeur'] ?? '') . ' ' . ($camion['nom_chauffeur'] ?? '')); ?>
-                                        </td>
-                                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
-                                            <?php echo date('d/m/Y H:i', strtotime($camion['date_entree'] ?? '')); ?>
-                                        </td>
-                                        <td class="px-4 py-3 whitespace-nowrap text-sm">
-                                            <a href="enregistrement.php?select=<?php echo $camion['idEntree']; ?><?php echo !empty($search_immat) ? '&search=' . urlencode($search_immat) : ''; ?>" 
-                                               class="inline-flex items-center px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-full text-sm font-medium">
-                                                <i class="fas fa-weight-scale mr-1"></i>Peser
-                                            </a>
-                                        </td>
-                                    </tr>
-                                    <?php endforeach; ?>
-                                <?php else: ?>
-                                <tr>
-                                    <td colspan="4" class="px-4 py-6 text-center text-sm text-gray-500">
-                                        <i class="fas fa-check-circle text-2xl text-gray-300 mb-2 block"></i>
-                                        Aucun camion chargé à peser
-                                    </td>
-                                </tr>
-                                <?php endif; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                    <div class="p-3 border-t text-center">
-                        <span class="text-xs text-gray-500">
-                            <?php echo count($camions_charges_non_peses); ?> camion(s) à peser
-                            <?php if (!empty($search_immat)): ?>
-                                <br><span class="text-blue-500">(filtre: <?php echo safe_html($search_immat); ?>)</span>
-                            <?php endif; ?>
-                        </span>
-                    </div>
-                </div>
-                
-                <!-- Section 2: Camions chargés déjà pesés -->
-                <div class="bg-white shadow rounded-lg">
-                    <div class="p-4 border-b">
-                        <h3 class="text-md font-bold text-gray-800">
-                            <i class="fas fa-check-circle mr-2"></i>Déjà Pesés (Chargés)
-                        </h3>
-                        <p class="text-sm text-gray-600">Camions chargés avec pesage effectué</p>
-                    </div>
-                    <div class="scrollable-table-small">
-                        <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="sticky-header bg-gray-50">
-                                <tr>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Immatriculation</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date Pesage</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">État</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody class="bg-white divide-y divide-gray-200">
-                                <?php if (!empty($camions_charges_peses)): ?>
-                                    <?php foreach ($camions_charges_peses as $camion): ?>
-                                    <tr class="hover:bg-gray-50 transition-colors duration-150">
-                                        <td class="px-4 py-3 whitespace-nowrap">
-                                            <div class="flex items-center">
-                                                <div class="flex-shrink-0 h-8 w-8 <?php echo $camion['surcharge'] ? 'bg-red-100' : 'bg-green-100'; ?> rounded-full flex items-center justify-center">
-                                                    <i class="fas fa-truck <?php echo $camion['surcharge'] ? 'text-red-600' : 'text-green-600'; ?> text-sm"></i>
-                                                </div>
-                                                <div class="ml-3">
-                                                    <div class="text-sm font-medium text-gray-900">
-                                                        <?php echo safe_html($camion['immatriculation']); ?>
-                                                    </div>
-                                                    <div class="text-xs text-gray-500">
-                                                        <?php echo safe_html($camion['type_camion'] ?? ''); ?>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </td>
-                                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
-                                            <?php echo date('d/m/Y H:i', strtotime($camion['date_pesage'] ?? '')); ?>
-                                        </td>
-                                        <td class="px-4 py-3 whitespace-nowrap">
-                                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
-                                                <?php echo $camion['surcharge'] ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'; ?>">
-                                                <?php echo $camion['surcharge'] ? 'Surcharge' : 'Conforme'; ?>
-                                            </span>
-                                        </td>
-                                        <td class="px-4 py-3 whitespace-nowrap text-sm">
-                                            <div class="flex flex-row space-x-2">
-                                                <a href="enregistrement.php?select=<?php echo $camion['idEntree']; ?>&mode=view<?php echo !empty($search_immat) ? '&search=' . urlencode($search_immat) : ''; ?>" 
-                                                   class="inline-flex items-center px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-full text-sm font-medium">
-                                                    <i class="fas fa-eye mr-1"></i>Détails
-                                                </a>
-                                                <a href="enregistrement.php?select=<?php echo $camion['idEntree']; ?>&mode=edit<?php echo !empty($search_immat) ? '&search=' . urlencode($search_immat) : ''; ?>" 
-                                                   class="inline-flex items-center px-3 py-1 bg-yellow-100 hover:bg-yellow-200 text-yellow-800 rounded-full text-sm font-medium">
-                                                    <i class="fas fa-edit mr-1"></i>Modifier
-                                                </a>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                    <?php endforeach; ?>
-                                <?php else: ?>
-                                <tr>
-                                    <td colspan="4" class="px-4 py-6 text-center text-sm text-gray-500">
-                                        <i class="fas fa-truck-loading text-2xl text-gray-300 mb-2 block"></i>
-                                        Aucun camion chargé pesé
-                                    </td>
-                                </tr>
-                                <?php endif; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                    <div class="p-3 border-t text-center">
-                        <span class="text-xs text-gray-500">
-                            <?php echo count($camions_charges_peses); ?> camion(s) pesé(s)
-                            <?php if (!empty($search_immat)): ?>
-                                <br><span class="text-blue-500">(filtre: <?php echo safe_html($search_immat); ?>)</span>
-                            <?php endif; ?>
-                        </span>
-                    </div>
-                </div>
-                
-            </div>
-        </div>
-        
-        <!-- Debug section (optionnel - à supprimer en production) -->
-        <?php if (false): // Mettre à true pour activer le debug ?>
-        <div class="mt-8 bg-yellow-50 p-4 rounded-lg">
-            <h3 class="font-bold text-yellow-800">Debug info:</h3>
-            <div class="grid grid-cols-2 gap-4 mt-2">
-                <div>
-                    <h4>Camions chargés non pesés:</h4>
-                    <pre class="text-xs"><?php echo count($camions_charges_non_peses); ?> camions</pre>
-                    <?php foreach ($camions_charges_non_peses as $cam): ?>
-                        <div class="text-xs"><?php echo $cam['immatriculation'] . ' - ' . $cam['etat'] . ' - date_pesage: ' . ($cam['date_pesage'] ?? 'NULL'); ?></div>
-                    <?php endforeach; ?>
-                </div>
-                <div>
-                    <h4>Camions chargés pesés:</h4>
-                    <pre class="text-xs"><?php echo count($camions_charges_peses); ?> camions</pre>
-                    <?php foreach ($camions_charges_peses as $cam): ?>
-                        <div class="text-xs"><?php echo $cam['immatriculation'] . ' - ' . $cam['etat'] . ' - date_pesage: ' . ($cam['date_pesage'] ?? 'NULL'); ?></div>
-                    <?php endforeach; ?>
-                </div>
-            </div>
-        </div>
-        <?php endif; ?>
-        
     </div>
     
     <script>
@@ -1018,11 +1083,30 @@ if ($mode == 'view' && $pesage_existant) {
         const typesMarchandises = <?php echo json_encode($types_marchandises); ?>;
         const isViewMode = <?php echo ($mode == 'view') ? 'true' : 'false'; ?>;
         const isCamionVide = <?php echo $isCamionVide ? 'true' : 'false'; ?>;
+        const ongletActif = '<?php echo $onglet_actif; ?>';
         
         // Données pour le mode view
         const viewPoidsTotal = <?php echo $poids_total_camion_view; ?>;
         const viewSurcharge = <?php echo $surcharge_view ? 'true' : 'false'; ?>;
         const viewPoidsMarchandises = <?php echo $poids_total_marchandises_view; ?>;
+        
+        // Fonction pour changer d'onglet
+        function changerOnglet(onglet) {
+            // Mettre à jour l'input caché
+            document.getElementById('onglet-input').value = onglet;
+            
+            // Rediriger avec le nouvel onglet
+            const searchParams = new URLSearchParams(window.location.search);
+            searchParams.set('onglet', onglet);
+            
+            // Garder la recherche si elle existe
+            const searchInput = document.querySelector('input[name="search"]');
+            if (searchInput && searchInput.value) {
+                searchParams.set('search', searchInput.value);
+            }
+            
+            window.location.href = 'enregistrement.php?' + searchParams.toString();
+        }
         
         // Fonction pour ajouter un champ de marchandise
         function addMarchandiseField() {
@@ -1055,7 +1139,7 @@ if ($mode == 'view' && $pesage_existant) {
                                 class="w-full px-2 py-1 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500" required>
                             <option value="">Sélectionner</option>
                             ${typesMarchandises.map(type => 
-                                `<option value="${type.id}">${escapeHtml(type.nom)}</option>`
+                                `<option value="${escapeHtml(type.id)}">${escapeHtml(type.nom)}</option>`
                             ).join('')}
                         </select>
                     </div>
@@ -1066,6 +1150,7 @@ if ($mode == 'view' && $pesage_existant) {
                         <input type="number" name="marchandises[${marchandiseIndex}][poids]" 
                                step="0.01" min="0.01" value=""
                                class="marchandise-poids w-full px-2 py-1 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500" 
+                               placeholder="Saisir le poids"
                                required>
                     </div>
                 </div>
@@ -1235,6 +1320,14 @@ if ($mode == 'view' && $pesage_existant) {
         
         // Événements
         document.addEventListener('DOMContentLoaded', function() {
+            // Gestion des onglets
+            document.querySelectorAll('.tab-button').forEach(button => {
+                button.addEventListener('click', function() {
+                    const onglet = this.getAttribute('data-tab');
+                    changerOnglet(onglet);
+                });
+            });
+            
             if (isViewMode) {
                 // En mode view, afficher directement les résultats
                 calculatePesage();
@@ -1253,9 +1346,9 @@ if ($mode == 'view' && $pesage_existant) {
                     addMarchandiseBtn.classList.add('opacity-50', 'cursor-not-allowed');
                 }
             } else {
-                // Bouton pour ajouter une marchandise (seulement si camion n'est pas vide)
+                // Bouton pour ajouter une marchandise
                 const addBtn = document.getElementById('addMarchandise');
-                if (addBtn && !isCamionVide) {
+                if (addBtn) {
                     addBtn.addEventListener('click', addMarchandiseField);
                 }
                 
@@ -1265,7 +1358,7 @@ if ($mode == 'view' && $pesage_existant) {
                     calculateBtn.addEventListener('click', calculatePesage);
                 }
                 
-                // Écouter les changements dans les champs de poids (seulement si camion n'est pas vide)
+                // Écouter les changements dans les champs de poids
                 if (!isCamionVide) {
                     document.addEventListener('input', function(e) {
                         if (e.target.classList.contains('marchandise-poids')) {
@@ -1292,7 +1385,7 @@ if ($mode == 'view' && $pesage_existant) {
                 }
             }
             
-            // Délégation d'événements pour les boutons de suppression (seulement si camion n'est pas vide)
+            // Délégation d'événements pour les boutons de suppression
             if (!isCamionVide) {
                 document.addEventListener('click', function(e) {
                     if (e.target.closest('.remove-marchandise')) {
@@ -1301,7 +1394,7 @@ if ($mode == 'view' && $pesage_existant) {
                 });
             }
             
-            // Mettre à jour le résumé initial (seulement si camion n'est pas vide)
+            // Mettre à jour le résumé initial
             if (!isCamionVide) {
                 updateMarchandisesSummary();
             }
@@ -1324,15 +1417,15 @@ if ($mode == 'view' && $pesage_existant) {
                     // Si le camion n'est pas vide, vérifier les marchandises
                     if (!isCamionVide && etatCamion !== 'vide') {
                         const poidsInputs = document.querySelectorAll('.marchandise-poids');
-                        let hasMarchandises = false;
+                        let hasValidMarchandises = false;
                         poidsInputs.forEach(input => {
                             if (input.value && parseFloat(input.value) > 0) {
-                                hasMarchandises = true;
+                                hasValidMarchandises = true;
                             }
                         });
                         
-                        if (!hasMarchandises) {
-                            if (!confirm('Aucune marchandise n\'a été ajoutée. Voulez-vous continuer ?')) {
+                        if (!hasValidMarchandises) {
+                            if (!confirm('Aucune marchandise avec un poids valide n\'a été saisie. Voulez-vous continuer ?')) {
                                 e.preventDefault();
                                 return false;
                             }

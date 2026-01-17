@@ -45,11 +45,7 @@ $role = $user['role'] ?? null;
                class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-100">
                 🏢 <span>Gestion des types</span>
             </a>
-
-            <a href="logs.php"
-               class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-100">
-                🕒 <span>Logs d'activités</span>
-            </a>
+            
             <a href="rapports.php"
                    class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-100">
                     📄 <span>Rapports</span>
