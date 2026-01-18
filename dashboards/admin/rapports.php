@@ -4,14 +4,16 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 require_once '../../config/db_connect.php';
-// require_once '../../vendor/autoload.php';
+require_once '../../vendor/autoload.php';
     
-//     use PhpOffice\PhpSpreadsheet\Spreadsheet;
-//     use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
-//     use PhpOffice\PhpSpreadsheet\Style\Border;
-//     use PhpOffice\PhpSpreadsheet\Style\Alignment;
-//     use PhpOffice\PhpSpreadsheet\Style\Fill;
-//     use TCPDF;
+// Décommenter les imports nécessaires
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use PhpOffice\PhpSpreadsheet\Style\Border;
+use PhpOffice\PhpSpreadsheet\Style\Alignment;
+use PhpOffice\PhpSpreadsheet\Style\Fill;
+use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
+
 $user = $_SESSION['user'] ?? null;
 $role = $user['role'] ?? null;
 
@@ -460,8 +462,6 @@ try {
 
 // Export en Excel (PhpSpreadsheet)
 if (isset($_GET['export']) && $_GET['export'] === 'excel') {
-    
-    
     $spreadsheet = new Spreadsheet();
     $sheet = $spreadsheet->getActiveSheet();
     
@@ -499,22 +499,23 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
     ];
     
     $sheet->setCellValue('A1', $titres[$filtre_type]);
-    $sheet->mergeCells('A1:' . chr(65 + count($headers) - 1) . '1');
+    $sheet->mergeCells('A1:' . Coordinate::stringFromColumnIndex(count($headers)) . '1');
     $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(16);
     $sheet->getStyle('A1')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     
     // Sous-titre (période)
     $sheet->setCellValue('A2', 'Période: ' . date('d/m/Y', strtotime($filtre_date_debut)) . ' - ' . date('d/m/Y', strtotime($filtre_date_fin)));
-    $sheet->mergeCells('A2:' . chr(65 + count($headers) - 1) . '2');
+    $sheet->mergeCells('A2:' . Coordinate::stringFromColumnIndex(count($headers)) . '2');
     $sheet->getStyle('A2')->getFont()->setItalic(true);
     $sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     
     // En-têtes
-    $col = 'A';
+    $colIndex = 1;
     foreach ($headers as $header) {
-        $sheet->setCellValue($col . '3', $header);
-        $sheet->getColumnDimension($col)->setAutoSize(true);
-        $col++;
+        $colLetter = Coordinate::stringFromColumnIndex($colIndex);
+        $sheet->setCellValue($colLetter . '3', $header);
+        $sheet->getColumnDimension($colLetter)->setAutoSize(true);
+        $colIndex++;
     }
     
     // Style des en-têtes
@@ -524,79 +525,191 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
         'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
         'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN]]
     ];
-    $sheet->getStyle('A3:' . chr(65 + count($headers) - 1) . '3')->applyFromArray($headerStyle);
+    
+    $lastColLetter = Coordinate::stringFromColumnIndex(count($headers));
+    $sheet->getStyle('A3:' . $lastColLetter . '3')->applyFromArray($headerStyle);
     
     // Remplir les données
     $row = 4;
     foreach ($resultats as $data) {
-        $col = 'A';
+        $colIndex = 1;
+        
         switch ($filtre_type) {
             case 'camions_entrants':
-                $sheet->setCellValue($col++, $data['immatriculation']);
-                $sheet->setCellValue($col++, $data['prenom_chauffeur'] . ' ' . $data['nom_chauffeur']);
-                $sheet->setCellValue($col++, $data['date_entree']);
-                $sheet->setCellValue($col++, $data['port_nom'] ?? '');
-                $sheet->setCellValue($col++, $data['type_camion'] ?? '');
-                $sheet->setCellValue($col++, $data['etat']);
-                $sheet->setCellValue($col++, $data['nb_marchandises'] ?? 0);
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['immatriculation']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['prenom_chauffeur'] . ' ' . $data['nom_chauffeur']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, date('d/m/Y H:i', strtotime($data['date_entree'])));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['port_nom'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['type_camion'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['etat']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nb_marchandises'] ?? 0);
                 break;
+                
             case 'camions_sortis':
-                $sheet->setCellValue($col++, $data['immatriculation']);
-                $sheet->setCellValue($col++, $data['prenom_chauffeur'] . ' ' . $data['nom_chauffeur']);
-                $sheet->setCellValue($col++, $data['date_sortie']);
-                $sheet->setCellValue($col++, $data['type_sortie'] == 'charge' ? 'Chargé' : 'Déchargé');
-                $sheet->setCellValue($col++, $data['port_nom'] ?? '');
-                $sheet->setCellValue($col++, $data['ptav'] ?? 0);
-                $sheet->setCellValue($col++, $data['ptac'] ?? 0);
-                $sheet->setCellValue($col++, $data['ptra'] ?? 0);
-                $sheet->setCellValue($col++, $data['poids_total_camion'] ?? 0);
-                $sheet->setCellValue($col++, isset($data['surcharge']) && $data['surcharge'] ? 'Oui' : 'Non');
-                $sheet->setCellValue($col++, $data['nb_marchandises'] ?? 0);
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['immatriculation']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['prenom_chauffeur'] . ' ' . $data['nom_chauffeur']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, date('d/m/Y H:i', strtotime($data['date_sortie'])));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['type_sortie'] == 'charge' ? 'Chargé' : 'Déchargé');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['port_nom'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['ptav'] ?? 0);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['ptac'] ?? 0);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['ptra'] ?? 0);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['poids_total_camion'] ?? 0);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, isset($data['surcharge']) && $data['surcharge'] ? 'Oui' : 'Non');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nb_marchandises'] ?? 0);
                 break;
+                
             case 'bateaux_entrants':
-                $sheet->setCellValue($col++, $data['nom_navire']);
-                $sheet->setCellValue($col++, $data['immatriculation']);
-                $sheet->setCellValue($col++, $data['prenom_capitaine'] . ' ' . $data['nom_capitaine']);
-                $sheet->setCellValue($col++, $data['date_entree']);
-                $sheet->setCellValue($col++, $data['port_nom'] ?? '');
-                $sheet->setCellValue($col++, $data['type_bateau'] ?? '');
-                $sheet->setCellValue($col++, $data['etat']);
-                $sheet->setCellValue($col++, $data['nb_marchandises'] ?? 0);
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nom_navire']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['immatriculation']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['prenom_capitaine'] . ' ' . $data['nom_capitaine']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, date('d/m/Y H:i', strtotime($data['date_entree'])));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['port_nom'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['type_bateau'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['etat']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nb_marchandises'] ?? 0);
                 break;
+                
             case 'bateaux_sortis':
-                $sheet->setCellValue($col++, $data['nom_navire']);
-                $sheet->setCellValue($col++, $data['immatriculation']);
-                $sheet->setCellValue($col++, $data['prenom_capitaine'] . ' ' . $data['nom_capitaine']);
-                $sheet->setCellValue($col++, $data['date_sortie']);
-                $sheet->setCellValue($col++, $data['port_nom'] ?? '');
-                $sheet->setCellValue($col++, $data['type_bateau'] ?? '');
-                $sheet->setCellValue($col++, $data['etat']);
-                $sheet->setCellValue($col++, $data['nb_marchandises'] ?? 0);
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nom_navire']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['immatriculation']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['prenom_capitaine'] . ' ' . $data['nom_capitaine']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, date('d/m/Y H:i', strtotime($data['date_sortie'])));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['port_nom'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['type_bateau'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['etat']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nb_marchandises'] ?? 0);
                 break;
+                
             case 'marchandises_entrees':
-                $sheet->setCellValue($col++, $data['type_marchandise']);
-                $sheet->setCellValue($col++, $data['poids']);
-                $sheet->setCellValue($col++, $data['poids'] / 1000);
-                $sheet->setCellValue($col++, $data['origine'] == 'camion' ? 'Camion' : 'Bateau');
-                $sheet->setCellValue($col++, $data['nom_navire']);
-                $sheet->setCellValue($col++, $data['immatriculation']);
-                $sheet->setCellValue($col++, $data['operateur']);
-                $sheet->setCellValue($col++, $data['date_operation']);
-                $sheet->setCellValue($col++, $data['port_nom'] ?? '');
-                $sheet->setCellValue($col++, $data['note'] ?? '');
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['type_marchandise']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, number_format($data['poids'], 2));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, number_format($data['poids'] / 1000, 2));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['origine'] == 'camion' ? 'Camion' : 'Bateau');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nom_navire']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['immatriculation']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['operateur']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, date('d/m/Y H:i', strtotime($data['date_operation'])));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['port_nom'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['note'] ?? '');
                 break;
+                
             case 'marchandises_sorties':
-                $sheet->setCellValue($col++, $data['type_marchandise']);
-                $sheet->setCellValue($col++, $data['poids']);
-                $sheet->setCellValue($col++, $data['poids'] / 1000);
-                $sheet->setCellValue($col++, $data['origine'] == 'camion' ? 'Camion' : 'Bateau');
-                $sheet->setCellValue($col++, $data['nom_navire']);
-                $sheet->setCellValue($col++, $data['immatriculation']);
-                $sheet->setCellValue($col++, $data['operateur']);
-                $sheet->setCellValue($col++, $data['date_operation']);
-                $sheet->setCellValue($col++, $data['port_nom'] ?? '');
-                $sheet->setCellValue($col++, isset($data['surcharge']) && $data['surcharge'] ? 'Oui' : 'Non');
-                $sheet->setCellValue($col++, $data['note'] ?? '');
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['type_marchandise']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, number_format($data['poids'], 2));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, number_format($data['poids'] / 1000, 2));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['origine'] == 'camion' ? 'Camion' : 'Bateau');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nom_navire']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['immatriculation']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['operateur']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, date('d/m/Y H:i', strtotime($data['date_operation'])));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['port_nom'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, isset($data['surcharge']) && $data['surcharge'] ? 'Oui' : 'Non');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['note'] ?? '');
                 break;
         }
         $row++;
@@ -611,7 +724,9 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
             ]
         ]
     ];
-    $sheet->getStyle('A3:' . chr(65 + count($headers) - 1) . ($row-1))->applyFromArray($dataStyle);
+    
+    $lastDataRow = $row - 1;
+    $sheet->getStyle('A3:' . $lastColLetter . $lastDataRow)->applyFromArray($dataStyle);
     
     // Ajouter les statistiques en bas
     $sheet->setCellValue('A' . ($row+1), 'Statistiques:');
@@ -641,10 +756,6 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
 
 // Export en PDF (TCPDF)
 if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
-    require_once '../../vendor/autoload.php';
-    
-    
-    
     // Créer une nouvelle instance de TCPDF
     $pdf = new TCPDF('L', PDF_UNIT, PDF_PAGE_FORMAT, true, 'UTF-8', false);
     
@@ -919,15 +1030,11 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
     <?php include '../../includes/navbar.php'; ?>
     
     <div class="container mx-auto p-4">
-        
-        
         <?php if (isset($error)): ?>
             <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
                 <?php echo safe_html($error); ?>
             </div>
         <?php endif; ?>
-        
-        
         
         <!-- Onglets et filtres -->
         <div class="bg-white shadow rounded-lg mb-6">
@@ -1091,7 +1198,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
                             <button type="submit" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-6 rounded-lg">
                                 <i class="fas fa-filter mr-2"></i>Appliquer les filtres
                             </button>
-                            <a href="historique.php" class="ml-2 text-gray-600 hover:text-gray-800 font-medium py-2 px-4 rounded-lg">
+                            <a href="rapports.php" class="ml-2 text-gray-600 hover:text-gray-800 font-medium py-2 px-4 rounded-lg">
                                 <i class="fas fa-times mr-2"></i>Réinitialiser
                             </a>
                         </div>
