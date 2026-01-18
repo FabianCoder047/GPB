@@ -370,18 +370,7 @@ try {
                 </h2>
                 
                 <div class="flex items-center space-x-4">
-                    <h2 class="text-sm font-bold text-gray-600">Exportez selon les filtres</h2>
-                    <!-- Boutons d'export -->
-                    <div class="flex space-x-2">
-                        <a href="export_pdf.php?<?php echo http_build_query($_GET); ?>" 
-                           class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-3 rounded-lg focus:outline-none focus:shadow-outline text-sm">
-                            <i class="fas fa-file-pdf mr-1"></i>PDF
-                        </a>
-                        <a href="export_excel.php?<?php echo http_build_query($_GET); ?>" 
-                           class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-3 rounded-lg focus:outline-none focus:shadow-outline text-sm">
-                            <i class="fas fa-file-excel mr-1"></i>Excel
-                        </a>
-                    </div>
+                    
                     
                     <!-- Statistiques des résultats -->
                     <div class="text-sm text-gray-600 border-l border-gray-300 pl-4">

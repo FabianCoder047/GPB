@@ -4,14 +4,16 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 require_once '../../config/db_connect.php';
-// require_once '../../vendor/autoload.php';
+require_once '../../vendor/autoload.php';
     
-//     use PhpOffice\PhpSpreadsheet\Spreadsheet;
-//     use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
-//     use PhpOffice\PhpSpreadsheet\Style\Border;
-//     use PhpOffice\PhpSpreadsheet\Style\Alignment;
-//     use PhpOffice\PhpSpreadsheet\Style\Fill;
-//     use TCPDF;
+// Décommenter les imports nécessaires
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use PhpOffice\PhpSpreadsheet\Style\Border;
+use PhpOffice\PhpSpreadsheet\Style\Alignment;
+use PhpOffice\PhpSpreadsheet\Style\Fill;
+use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
+
 $user = $_SESSION['user'] ?? null;
 $role = $user['role'] ?? null;
 
@@ -203,11 +205,11 @@ try {
     switch ($filtre_type) {
         case 'camions_entrants':
             $query = "
-                SELECT ce.*, tc.nom as type_camion, p.nom as port_nom,
-                       ps.poids_total_marchandises, ps.surcharge, ps.date_pesage,
-                       COUNT(mp.idMarchandise) as nb_marchandises
+                SELECT ce.*, p.nom as port_nom,
+                       ps.poids_total_marchandises, ps.ptav, ps.ptac, ps.ptra, ps.date_pesage,
+                       COUNT(mp.idMarchandise) as nb_marchandises,
+                       (ps.ptav + ps.poids_total_marchandises) as poids_total_camion
                 FROM camions_entrants ce
-                LEFT JOIN type_camion tc ON ce.idTypeCamion = tc.id
                 LEFT JOIN port p ON ce.idPort = p.id
                 LEFT JOIN pesages ps ON ce.idEntree = ps.idEntree
                 LEFT JOIN marchandises_pesage mp ON ps.idPesage = mp.idPesage
@@ -222,15 +224,14 @@ try {
             
         case 'camions_sortis':
             $query = "
-                SELECT ce.*, tc.nom as type_camion, p.nom as port_nom,
+                SELECT ce.*, p.nom as port_nom,
                        cs.date_sortie, cs.type_sortie,
-                       ps.poids_total_marchandises, ps.surcharge, ps.date_pesage,
-                       ps.ptav, ps.ptac, ps.ptra, ps.note_surcharge,
+                       ps.poids_total_marchandises, ps.ptav, ps.ptac, ps.ptra, ps.date_pesage,
+                       ps.note_surcharge,
                        COUNT(mp.idMarchandise) as nb_marchandises,
                        (ps.ptav + ps.poids_total_marchandises) as poids_total_camion
                 FROM camions_sortants cs
                 INNER JOIN camions_entrants ce ON cs.idEntree = ce.idEntree
-                LEFT JOIN type_camion tc ON ce.idTypeCamion = tc.id
                 LEFT JOIN port p ON ce.idPort = p.id
                 LEFT JOIN pesages ps ON ce.idEntree = ps.idEntree
                 LEFT JOIN marchandises_pesage mp ON ps.idPesage = mp.idPesage
@@ -432,15 +433,12 @@ try {
             $stats['moyenne_poids_t'] = $stats['total'] > 0 ? ($poids_total_kg / 1000) / $stats['total'] : 0;
         }
         
-        // Calculer les statistiques pour les camions sortis
-        if ($filtre_type === 'camions_sortis') {
+        // Calculer les statistiques pour les camions (entrants et sortis)
+        if (in_array($filtre_type, ['camions_entrants', 'camions_sortis'])) {
             $surcharges = 0;
             $poids_total = 0;
             
             foreach ($resultats as $row) {
-                if (isset($row['surcharge']) && $row['surcharge']) {
-                    $surcharges++;
-                }
                 if (isset($row['poids_total_camion'])) {
                     $poids_total += $row['poids_total_camion'];
                 }
@@ -460,8 +458,6 @@ try {
 
 // Export en Excel (PhpSpreadsheet)
 if (isset($_GET['export']) && $_GET['export'] === 'excel') {
-    
-    
     $spreadsheet = new Spreadsheet();
     $sheet = $spreadsheet->getActiveSheet();
     
@@ -469,22 +465,22 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
     $headers = [];
     switch ($filtre_type) {
         case 'camions_entrants':
-            $headers = ['Immatriculation', 'Chauffeur', 'Date Entrée', 'Port', 'Type Camion', 'État', 'NB Marchandises'];
+            $headers = ['Immatriculation', 'Chauffeur', 'Téléphone', 'NIF', 'Date Entrée', 'Provenance', 'PTAV', 'PTAC', 'PTRA', 'Poids Total (kg)', 'NB Marchandises'];
             break;
         case 'camions_sortis':
-            $headers = ['Immatriculation', 'Chauffeur', 'Date Sortie', 'Type Sortie', 'Port', 'PTAV', 'PTAC', 'PTRA', 'Poids Total (kg)', 'Surcharge', 'NB Marchandises'];
+            $headers = ['Immatriculation', 'Chauffeur', 'Téléphone', 'NIF', 'Date Sortie', 'Type Sortie', 'Destination', 'PTAV', 'PTAC', 'PTRA', 'Poids Total (kg)', 'NB Marchandises'];
             break;
         case 'bateaux_entrants':
-            $headers = ['Nom Navire', 'Immatriculation', 'Capitaine', 'Date Entrée', 'Port', 'Type Bateau', 'État', 'NB Marchandises'];
+            $headers = ['Nom Navire', 'Immatriculation', 'Capitaine', 'Date Entrée', 'Provenance', 'Type Bateau', 'État', 'NB Marchandises'];
             break;
         case 'bateaux_sortis':
             $headers = ['Nom Navire', 'Immatriculation', 'Capitaine', 'Date Sortie', 'Port Destination', 'Type Bateau', 'État', 'NB Marchandises'];
             break;
         case 'marchandises_entrees':
-            $headers = ['Type Marchandise', 'Poids (kg)', 'Poids (t)', 'Origine', 'Nom Navire/Camion', 'Immatriculation', 'Opérateur', 'Date Entrée', 'Port', 'Note'];
+            $headers = ['Type Marchandise', 'Poids (kg)', 'Poids (t)', 'Engin', 'Nom Navire/Camion', 'Immatriculation', 'Opérateur', 'Date Entrée', 'Port', 'Note'];
             break;
         case 'marchandises_sorties':
-            $headers = ['Type Marchandise', 'Poids (kg)', 'Poids (t)', 'Origine', 'Nom Navire/Camion', 'Immatriculation', 'Opérateur', 'Date Sortie', 'Port', 'Surcharge', 'Note'];
+            $headers = ['Type Marchandise', 'Poids (kg)', 'Poids (t)', 'Engin', 'Nom Navire/Camion', 'Immatriculation', 'Opérateur', 'Date Sortie', 'Port', 'Surcharge', 'Note'];
             break;
     }
     
@@ -499,22 +495,77 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
     ];
     
     $sheet->setCellValue('A1', $titres[$filtre_type]);
-    $sheet->mergeCells('A1:' . chr(65 + count($headers) - 1) . '1');
+    $sheet->mergeCells('A1:' . Coordinate::stringFromColumnIndex(count($headers)) . '1');
     $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(16);
     $sheet->getStyle('A1')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     
     // Sous-titre (période)
     $sheet->setCellValue('A2', 'Période: ' . date('d/m/Y', strtotime($filtre_date_debut)) . ' - ' . date('d/m/Y', strtotime($filtre_date_fin)));
-    $sheet->mergeCells('A2:' . chr(65 + count($headers) - 1) . '2');
+    $sheet->mergeCells('A2:' . Coordinate::stringFromColumnIndex(count($headers)) . '2');
     $sheet->getStyle('A2')->getFont()->setItalic(true);
     $sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     
+    // Ajouter les filtres appliqués (uniquement pour les marchandises)
+    if (in_array($filtre_type, ['marchandises_entrees', 'marchandises_sorties'])) {
+        $filtres_text = 'Filtres appliqués: ';
+        $filtres_array = [];
+        
+        if ($filtre_marchandise) {
+            $stmt_march = $conn->prepare("SELECT nom FROM type_marchandise WHERE id = ?");
+            $stmt_march->bind_param("i", $filtre_marchandise);
+            $stmt_march->execute();
+            $result_march = $stmt_march->get_result();
+            if ($row_march = $result_march->fetch_assoc()) {
+                $filtres_array[] = 'Type: ' . $row_march['nom'];
+            }
+            $stmt_march->close();
+        }
+        
+        if ($filtre_origine) {
+            $origine_text = ($filtre_origine == 'camion') ? 'Camion' : 'Bateau';
+            $filtres_array[] = 'Moyen de transport: ' . $origine_text;
+        }
+        
+        if ($filtre_port) {
+            $stmt_port = $conn->prepare("SELECT nom FROM port WHERE id = ?");
+            $stmt_port->bind_param("i", $filtre_port);
+            $stmt_port->execute();
+            $result_port = $stmt_port->get_result();
+            if ($row_port = $result_port->fetch_assoc()) {
+                $filtres_array[] = 'Port: ' . $row_port['nom'];
+            }
+            $stmt_port->close();
+        }
+        
+        if ($filtre_immatriculation) {
+            $filtres_array[] = 'Immatriculation: ' . $filtre_immatriculation;
+        }
+        
+        if ($filtre_chauffeur) {
+            $filtres_array[] = 'Opérateur: ' . $filtre_chauffeur;
+        }
+        
+        if (!empty($filtres_array)) {
+            $filtres_text .= implode(', ', $filtres_array);
+            $sheet->setCellValue('A3', $filtres_text);
+            $sheet->mergeCells('A3:' . Coordinate::stringFromColumnIndex(count($headers)) . '3');
+            $sheet->getStyle('A3')->getFont()->setItalic(true);
+            $sheet->getStyle('A3')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
+            $startRow = 4; // Commencer les en-têtes à la ligne 4
+        } else {
+            $startRow = 3; // Commencer les en-têtes à la ligne 3
+        }
+    } else {
+        $startRow = 3;
+    }
+    
     // En-têtes
-    $col = 'A';
+    $colIndex = 1;
     foreach ($headers as $header) {
-        $sheet->setCellValue($col . '3', $header);
-        $sheet->getColumnDimension($col)->setAutoSize(true);
-        $col++;
+        $colLetter = Coordinate::stringFromColumnIndex($colIndex);
+        $sheet->setCellValue($colLetter . $startRow, $header);
+        $sheet->getColumnDimension($colLetter)->setAutoSize(true);
+        $colIndex++;
     }
     
     // Style des en-têtes
@@ -524,79 +575,206 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
         'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
         'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN]]
     ];
-    $sheet->getStyle('A3:' . chr(65 + count($headers) - 1) . '3')->applyFromArray($headerStyle);
+    
+    $lastColLetter = Coordinate::stringFromColumnIndex(count($headers));
+    $sheet->getStyle('A' . $startRow . ':' . $lastColLetter . $startRow)->applyFromArray($headerStyle);
     
     // Remplir les données
-    $row = 4;
+    $row = $startRow + 1;
     foreach ($resultats as $data) {
-        $col = 'A';
+        $colIndex = 1;
+        
         switch ($filtre_type) {
             case 'camions_entrants':
-                $sheet->setCellValue($col++, $data['immatriculation']);
-                $sheet->setCellValue($col++, $data['prenom_chauffeur'] . ' ' . $data['nom_chauffeur']);
-                $sheet->setCellValue($col++, $data['date_entree']);
-                $sheet->setCellValue($col++, $data['port_nom'] ?? '');
-                $sheet->setCellValue($col++, $data['type_camion'] ?? '');
-                $sheet->setCellValue($col++, $data['etat']);
-                $sheet->setCellValue($col++, $data['nb_marchandises'] ?? 0);
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['immatriculation']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['prenom_chauffeur'] . ' ' . $data['nom_chauffeur']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['telephone_chauffeur'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nif_chauffeur'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, date('d/m/Y H:i', strtotime($data['date_entree'])));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['port_nom'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['ptav'] ?? 0);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['ptac'] ?? 0);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['ptra'] ?? 0);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['poids_total_camion'] ?? 0);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nb_marchandises'] ?? 0);
                 break;
+                
             case 'camions_sortis':
-                $sheet->setCellValue($col++, $data['immatriculation']);
-                $sheet->setCellValue($col++, $data['prenom_chauffeur'] . ' ' . $data['nom_chauffeur']);
-                $sheet->setCellValue($col++, $data['date_sortie']);
-                $sheet->setCellValue($col++, $data['type_sortie'] == 'charge' ? 'Chargé' : 'Déchargé');
-                $sheet->setCellValue($col++, $data['port_nom'] ?? '');
-                $sheet->setCellValue($col++, $data['ptav'] ?? 0);
-                $sheet->setCellValue($col++, $data['ptac'] ?? 0);
-                $sheet->setCellValue($col++, $data['ptra'] ?? 0);
-                $sheet->setCellValue($col++, $data['poids_total_camion'] ?? 0);
-                $sheet->setCellValue($col++, isset($data['surcharge']) && $data['surcharge'] ? 'Oui' : 'Non');
-                $sheet->setCellValue($col++, $data['nb_marchandises'] ?? 0);
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['immatriculation']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['prenom_chauffeur'] . ' ' . $data['nom_chauffeur']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['telephone_chauffeur'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nif_chauffeur'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, date('d/m/Y H:i', strtotime($data['date_sortie'])));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['type_sortie'] == 'charge' ? 'Chargé' : 'Déchargé');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['port_nom'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['ptav'] ?? 0);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['ptac'] ?? 0);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['ptra'] ?? 0);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['poids_total_camion'] ?? 0);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nb_marchandises'] ?? 0);
                 break;
+                
             case 'bateaux_entrants':
-                $sheet->setCellValue($col++, $data['nom_navire']);
-                $sheet->setCellValue($col++, $data['immatriculation']);
-                $sheet->setCellValue($col++, $data['prenom_capitaine'] . ' ' . $data['nom_capitaine']);
-                $sheet->setCellValue($col++, $data['date_entree']);
-                $sheet->setCellValue($col++, $data['port_nom'] ?? '');
-                $sheet->setCellValue($col++, $data['type_bateau'] ?? '');
-                $sheet->setCellValue($col++, $data['etat']);
-                $sheet->setCellValue($col++, $data['nb_marchandises'] ?? 0);
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nom_navire']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['immatriculation']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['prenom_capitaine'] . ' ' . $data['nom_capitaine']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, date('d/m/Y H:i', strtotime($data['date_entree'])));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['port_nom'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['type_bateau'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['etat']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nb_marchandises'] ?? 0);
                 break;
+                
             case 'bateaux_sortis':
-                $sheet->setCellValue($col++, $data['nom_navire']);
-                $sheet->setCellValue($col++, $data['immatriculation']);
-                $sheet->setCellValue($col++, $data['prenom_capitaine'] . ' ' . $data['nom_capitaine']);
-                $sheet->setCellValue($col++, $data['date_sortie']);
-                $sheet->setCellValue($col++, $data['port_nom'] ?? '');
-                $sheet->setCellValue($col++, $data['type_bateau'] ?? '');
-                $sheet->setCellValue($col++, $data['etat']);
-                $sheet->setCellValue($col++, $data['nb_marchandises'] ?? 0);
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nom_navire']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['immatriculation']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['prenom_capitaine'] . ' ' . $data['nom_capitaine']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, date('d/m/Y H:i', strtotime($data['date_sortie'])));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['port_nom'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['type_bateau'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['etat']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nb_marchandises'] ?? 0);
                 break;
+                
             case 'marchandises_entrees':
-                $sheet->setCellValue($col++, $data['type_marchandise']);
-                $sheet->setCellValue($col++, $data['poids']);
-                $sheet->setCellValue($col++, $data['poids'] / 1000);
-                $sheet->setCellValue($col++, $data['origine'] == 'camion' ? 'Camion' : 'Bateau');
-                $sheet->setCellValue($col++, $data['nom_navire']);
-                $sheet->setCellValue($col++, $data['immatriculation']);
-                $sheet->setCellValue($col++, $data['operateur']);
-                $sheet->setCellValue($col++, $data['date_operation']);
-                $sheet->setCellValue($col++, $data['port_nom'] ?? '');
-                $sheet->setCellValue($col++, $data['note'] ?? '');
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['type_marchandise']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, number_format($data['poids'], 2));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, number_format($data['poids'] / 1000, 2));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['origine'] == 'camion' ? 'Camion' : 'Bateau');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nom_navire']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['immatriculation']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['operateur']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, date('d/m/Y H:i', strtotime($data['date_operation'])));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['port_nom'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['note'] ?? '');
                 break;
+                
             case 'marchandises_sorties':
-                $sheet->setCellValue($col++, $data['type_marchandise']);
-                $sheet->setCellValue($col++, $data['poids']);
-                $sheet->setCellValue($col++, $data['poids'] / 1000);
-                $sheet->setCellValue($col++, $data['origine'] == 'camion' ? 'Camion' : 'Bateau');
-                $sheet->setCellValue($col++, $data['nom_navire']);
-                $sheet->setCellValue($col++, $data['immatriculation']);
-                $sheet->setCellValue($col++, $data['operateur']);
-                $sheet->setCellValue($col++, $data['date_operation']);
-                $sheet->setCellValue($col++, $data['port_nom'] ?? '');
-                $sheet->setCellValue($col++, isset($data['surcharge']) && $data['surcharge'] ? 'Oui' : 'Non');
-                $sheet->setCellValue($col++, $data['note'] ?? '');
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['type_marchandise']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, number_format($data['poids'], 2));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, number_format($data['poids'] / 1000, 2));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['origine'] == 'camion' ? 'Camion' : 'Bateau');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['nom_navire']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['immatriculation']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['operateur']);
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, date('d/m/Y H:i', strtotime($data['date_operation'])));
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['port_nom'] ?? '');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, isset($data['surcharge']) && $data['surcharge'] ? 'Oui' : 'Non');
+                
+                $colLetter = Coordinate::stringFromColumnIndex($colIndex++);
+                $sheet->setCellValue($colLetter . $row, $data['note'] ?? '');
                 break;
         }
         $row++;
@@ -611,21 +789,17 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
             ]
         ]
     ];
-    $sheet->getStyle('A3:' . chr(65 + count($headers) - 1) . ($row-1))->applyFromArray($dataStyle);
+    
+    $lastDataRow = $row - 1;
+    $sheet->getStyle('A' . $startRow . ':' . $lastColLetter . $lastDataRow)->applyFromArray($dataStyle);
     
     // Ajouter les statistiques en bas
     $sheet->setCellValue('A' . ($row+1), 'Statistiques:');
     $sheet->getStyle('A' . ($row+1))->getFont()->setBold(true);
     $sheet->setCellValue('A' . ($row+2), 'Total: ' . $stats['total']);
     
-    if (in_array($filtre_type, ['marchandises_entrees', 'marchandises_sorties', 'camions_sortis'])) {
+    if (in_array($filtre_type, ['marchandises_entrees', 'marchandises_sorties', 'camions_entrants', 'camions_sortis'])) {
         $sheet->setCellValue('A' . ($row+3), 'Poids total: ' . number_format($stats['poids_total_kg'], 2) . ' kg (' . number_format($stats['poids_total_t'], 2) . ' t)');
-        if ($filtre_type == 'marchandises_entrees' || $filtre_type == 'marchandises_sorties') {
-            $sheet->setCellValue('A' . ($row+4), 'Camions: ' . $stats['camions'] . ' | Bateaux: ' . $stats['bateaux']);
-        }
-        if ($filtre_type == 'camions_sortis') {
-            $sheet->setCellValue('A' . ($row+4), 'Surcharges: ' . $stats['surcharges']);
-        }
     }
     
     // Sauvegarder le fichier
@@ -641,10 +815,6 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
 
 // Export en PDF (TCPDF)
 if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
-    require_once '../../vendor/autoload.php';
-    
-    
-    
     // Créer une nouvelle instance de TCPDF
     $pdf = new TCPDF('L', PDF_UNIT, PDF_PAGE_FORMAT, true, 'UTF-8', false);
     
@@ -671,29 +841,67 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
         'marchandises_sorties' => 'Rapport des Marchandises Sorties'
     ];
     
-    // Titre principal
-    $pdf->SetFont('helvetica', 'B', 16);
-    $pdf->Cell(0, 10, $titres[$filtre_type], 0, 1, 'C');
+    // Construire le titre avec les filtres pour les marchandises
+    $titre_complet = $titres[$filtre_type];
     
-    // Sous-titre (période)
-    $pdf->SetFont('helvetica', 'I', 12);
-    $pdf->Cell(0, 10, 'Période: ' . date('d/m/Y', strtotime($filtre_date_debut)) . ' - ' . date('d/m/Y', strtotime($filtre_date_fin)), 0, 1, 'C');
-    
-    // Statistiques
-    $pdf->SetFont('helvetica', '', 10);
-    $pdf->Cell(0, 10, 'Total: ' . $stats['total'] . ' enregistrements', 0, 1, 'L');
-    
-    if (in_array($filtre_type, ['marchandises_entrees', 'marchandises_sorties', 'camions_sortis'])) {
-        $pdf->Cell(0, 10, 'Poids total: ' . number_format($stats['poids_total_kg'], 2) . ' kg (' . number_format($stats['poids_total_t'], 2) . ' t)', 0, 1, 'L');
-        if ($filtre_type == 'marchandises_entrees' || $filtre_type == 'marchandises_sorties') {
-            $pdf->Cell(0, 10, 'Camions: ' . $stats['camions'] . ' | Bateaux: ' . $stats['bateaux'], 0, 1, 'L');
+    // Ajouter les détails des filtres appliqués pour les marchandises
+    if (in_array($filtre_type, ['marchandises_entrees', 'marchandises_sorties'])) {
+        $filtres_details = [];
+        
+        if ($filtre_marchandise) {
+            $stmt_march = $conn->prepare("SELECT nom FROM type_marchandise WHERE id = ?");
+            $stmt_march->bind_param("i", $filtre_marchandise);
+            $stmt_march->execute();
+            $result_march = $stmt_march->get_result();
+            if ($row_march = $result_march->fetch_assoc()) {
+                $filtres_details[] = 'Type ' . $row_march['nom'];
+            }
+            $stmt_march->close();
         }
-        if ($filtre_type == 'camions_sortis') {
-            $pdf->Cell(0, 10, 'Surcharges: ' . $stats['surcharges'], 0, 1, 'L');
+        
+        if ($filtre_origine) {
+            $origine_text = ($filtre_origine == 'camion') ? 'Camion' : 'Bateau';
+            $filtres_details[] = 'Transport ' . $origine_text;
+        }
+        
+        if ($filtre_port) {
+            $stmt_port = $conn->prepare("SELECT nom FROM port WHERE id = ?");
+            $stmt_port->bind_param("i", $filtre_port);
+            $stmt_port->execute();
+            $result_port = $stmt_port->get_result();
+            if ($row_port = $result_port->fetch_assoc()) {
+                $filtres_details[] = 'Port ' . $row_port['nom'];
+            }
+            $stmt_port->close();
+        }
+        
+        if ($filtre_immatriculation) {
+            $filtres_details[] = 'Immat. ' . $filtre_immatriculation;
+        }
+        
+        if ($filtre_chauffeur) {
+            $filtres_details[] = 'Opérateur ' . $filtre_chauffeur;
+        }
+        
+        if (!empty($filtres_details)) {
+            $titre_complet .= ' - ' . implode(', ', $filtres_details);
         }
     }
     
-    $pdf->Ln(5);
+    // Titre principal
+    $pdf->SetFont('helvetica', 'B', 10);
+    $pdf->Cell(0, 10, "PORT DE BUJUMBURA", 0, 1, 'L');
+    $pdf->SetTextColor(128, 128, 128);
+    $pdf->Cell(0, 10, $titre_complet, 0, 1, 'L');
+    
+    // Sous-titre (période)
+    $pdf->SetFont('helvetica', 'I', 8);
+    $pdf->SetTextColor(128, 128, 128);
+    $pdf->Cell(0, 10, 'Période: ' . date('d/m/Y', strtotime($filtre_date_debut)) . ' - ' . date('d/m/Y', strtotime($filtre_date_fin)), 0, 1, 'L', 0, '', true, 0, false, 'T', 'M');
+    $pdf->SetTextColor(0, 0, 0);
+    
+    
+    $pdf->Ln(2);
     
     // En-têtes de tableau
     $headers = [];
@@ -701,34 +909,34 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
     
     switch ($filtre_type) {
         case 'camions_entrants':
-            $headers = ['Immatriculation', 'Chauffeur', 'Date Entrée', 'Port', 'Type', 'État', 'Nb March.'];
-            $colWidths = [35, 40, 30, 30, 25, 20, 20];
+            $headers = ['Immatriculation', 'Chauffeur', 'Téléphone', 'NIF', 'Date Entrée', 'Provenance', 'PTAV', 'PTAC', 'PTRA', 'Poids Total', 'Nb March.'];
+            $colWidths = [25, 30, 22, 18, 22, 25, 18, 18, 18, 22, 18];
             break;
         case 'camions_sortis':
-            $headers = ['Immatriculation', 'Chauffeur', 'Date Sortie', 'Type', 'Port', 'PTAV', 'PTAC', 'PTRA', 'Poids', 'Surcharge', 'Nb March.'];
-            $colWidths = [30, 35, 25, 20, 25, 25, 25, 25, 25, 20, 20];
+            $headers = ['Immatriculation', 'Chauffeur', 'Téléphone', 'NIF', 'Date Sortie', 'Type Sortie', 'Destination', 'PTAV', 'PTAC', 'PTRA', 'Poids Total', 'Nb March.'];
+            $colWidths = [23, 28, 20, 16, 20, 18, 23, 16, 16, 16, 20, 16];
             break;
         case 'bateaux_entrants':
-            $headers = ['Nom Navire', 'Immatriculation', 'Capitaine', 'Date Entrée', 'Port', 'Type', 'État', 'Nb March.'];
-            $colWidths = [40, 35, 40, 30, 30, 25, 20, 20];
+            $headers = ['Nom Navire', 'Immatriculation', 'Capitaine', 'Date Entrée', 'Provenance', 'Type', 'État', 'Nb March.'];
+            $colWidths = [35, 30, 35, 25, 25, 22, 18, 18];
             break;
         case 'bateaux_sortis':
-            $headers = ['Nom Navire', 'Immatriculation', 'Capitaine', 'Date Sortie', 'Port Dest.', 'Type', 'État', 'Nb March.'];
-            $colWidths = [40, 35, 40, 30, 30, 25, 20, 20];
+            $headers = ['Nom Navire', 'Immatriculation', 'Capitaine', 'Date Sortie', 'Destination', 'Type', 'État', 'Nb March.'];
+            $colWidths = [35, 30, 35, 25, 25, 22, 18, 18];
             break;
         case 'marchandises_entrees':
-            $headers = ['Type March.', 'Poids (kg)', 'Poids (t)', 'Origine', 'Nom', 'Immatriculation', 'Opérateur', 'Date', 'Port', 'Note'];
-            $colWidths = [35, 25, 25, 20, 35, 30, 35, 25, 25, 30];
+            $headers = ['Type March.', 'Poids (kg)', 'Poids (t)', 'Engin', 'Nom', 'Immatriculation', 'Opérateur', 'Date', 'Port', 'Note'];
+            $colWidths = [30, 22, 22, 18, 30, 25, 30, 22, 22, 25];
             break;
         case 'marchandises_sorties':
-            $headers = ['Type March.', 'Poids (kg)', 'Poids (t)', 'Origine', 'Nom', 'Immatriculation', 'Opérateur', 'Date', 'Port', 'Surcharge', 'Note'];
-            $colWidths = [30, 25, 25, 20, 30, 30, 30, 25, 25, 20, 25];
+            $headers = ['Type March.', 'Poids (kg)', 'Poids (t)', 'Engin', 'Nom', 'Immatriculation', 'Opérateur', 'Date', 'Port', 'Surcharge', 'Note'];
+            $colWidths = [28, 20, 20, 16, 28, 25, 28, 20, 20, 18, 22];
             break;
     }
     
     // Dessiner l'en-tête du tableau
-    $pdf->SetFillColor(44, 62, 80);
-    $pdf->SetTextColor(255);
+    $pdf->SetFillColor(245, 245, 245);
+    $pdf->SetTextColor(0);
     $pdf->SetFont('helvetica', 'B', 9);
     
     $x = $pdf->GetX();
@@ -761,15 +969,21 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
             case 'camions_entrants':
                 $pdf->Cell($colWidths[$colIndex++], 6, $row['immatriculation'], 1, 0, 'L', $fill);
                 $pdf->Cell($colWidths[$colIndex++], 6, $row['prenom_chauffeur'] . ' ' . $row['nom_chauffeur'], 1, 0, 'L', $fill);
+                $pdf->Cell($colWidths[$colIndex++], 6, $row['telephone_chauffeur'] ?? '', 1, 0, 'L', $fill);
+                $pdf->Cell($colWidths[$colIndex++], 6, $row['nif_chauffeur'] ?? '', 1, 0, 'L', $fill);
                 $pdf->Cell($colWidths[$colIndex++], 6, date('d/m/Y H:i', strtotime($row['date_entree'])), 1, 0, 'L', $fill);
                 $pdf->Cell($colWidths[$colIndex++], 6, $row['port_nom'] ?? '', 1, 0, 'L', $fill);
-                $pdf->Cell($colWidths[$colIndex++], 6, $row['type_camion'] ?? '', 1, 0, 'L', $fill);
-                $pdf->Cell($colWidths[$colIndex++], 6, $row['etat'], 1, 0, 'C', $fill);
+                $pdf->Cell($colWidths[$colIndex++], 6, $row['ptav'] ?? 0, 1, 0, 'R', $fill);
+                $pdf->Cell($colWidths[$colIndex++], 6, $row['ptac'] ?? 0, 1, 0, 'R', $fill);
+                $pdf->Cell($colWidths[$colIndex++], 6, $row['ptra'] ?? 0, 1, 0, 'R', $fill);
+                $pdf->Cell($colWidths[$colIndex++], 6, number_format($row['poids_total_camion'] ?? 0, 2), 1, 0, 'R', $fill);
                 $pdf->Cell($colWidths[$colIndex++], 6, $row['nb_marchandises'] ?? 0, 1, 0, 'C', $fill);
                 break;
             case 'camions_sortis':
                 $pdf->Cell($colWidths[$colIndex++], 6, $row['immatriculation'], 1, 0, 'L', $fill);
                 $pdf->Cell($colWidths[$colIndex++], 6, $row['prenom_chauffeur'] . ' ' . $row['nom_chauffeur'], 1, 0, 'L', $fill);
+                $pdf->Cell($colWidths[$colIndex++], 6, $row['telephone_chauffeur'] ?? '', 1, 0, 'L', $fill);
+                $pdf->Cell($colWidths[$colIndex++], 6, $row['nif_chauffeur'] ?? '', 1, 0, 'L', $fill);
                 $pdf->Cell($colWidths[$colIndex++], 6, date('d/m/Y H:i', strtotime($row['date_sortie'])), 1, 0, 'L', $fill);
                 $pdf->Cell($colWidths[$colIndex++], 6, $row['type_sortie'] == 'charge' ? 'Chargé' : 'Déchargé', 1, 0, 'C', $fill);
                 $pdf->Cell($colWidths[$colIndex++], 6, $row['port_nom'] ?? '', 1, 0, 'L', $fill);
@@ -777,7 +991,6 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
                 $pdf->Cell($colWidths[$colIndex++], 6, $row['ptac'] ?? 0, 1, 0, 'R', $fill);
                 $pdf->Cell($colWidths[$colIndex++], 6, $row['ptra'] ?? 0, 1, 0, 'R', $fill);
                 $pdf->Cell($colWidths[$colIndex++], 6, number_format($row['poids_total_camion'] ?? 0, 2), 1, 0, 'R', $fill);
-                $pdf->Cell($colWidths[$colIndex++], 6, isset($row['surcharge']) && $row['surcharge'] ? 'Oui' : 'Non', 1, 0, 'C', $fill);
                 $pdf->Cell($colWidths[$colIndex++], 6, $row['nb_marchandises'] ?? 0, 1, 0, 'C', $fill);
                 break;
             case 'bateaux_entrants':
@@ -849,13 +1062,8 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
         }
     }
     
-    // Pied de page avec date de génération
-    $pdf->SetY(-20);
-    $pdf->SetFont('helvetica', 'I', 8);
-    $pdf->Cell(0, 10, 'Généré le ' . date('d/m/Y à H:i'), 0, 0, 'C');
-    
     // Générer le PDF
-    $pdf->Output('rapport_' . $filtre_type . '_' . date('Y-m-d') . '.pdf', 'D');
+    $pdf->Output('Rapport_' . $filtre_type . '_' . date('Y-m-d') . '.pdf', 'D');
     exit();
 }
 ?>
@@ -919,15 +1127,11 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
     <?php include '../../includes/navbar.php'; ?>
     
     <div class="container mx-auto p-4">
-        
-        
         <?php if (isset($error)): ?>
             <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
                 <?php echo safe_html($error); ?>
             </div>
         <?php endif; ?>
-        
-        
         
         <!-- Onglets et filtres -->
         <div class="bg-white shadow rounded-lg mb-6">
@@ -1091,7 +1295,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
                             <button type="submit" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-6 rounded-lg">
                                 <i class="fas fa-filter mr-2"></i>Appliquer les filtres
                             </button>
-                            <a href="historiques.php" class="ml-2 text-gray-600 hover:text-gray-800 font-medium py-2 px-4 rounded-lg">
+                            <a href="rapports.php" class="ml-2 text-gray-600 hover:text-gray-800 font-medium py-2 px-4 rounded-lg">
                                 <i class="fas fa-times mr-2"></i>Réinitialiser
                             </a>
                         </div>
@@ -1158,10 +1362,14 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
                                         echo '
                                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Immatriculation</th>
                                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Chauffeur</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Téléphone</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">NIF</th>
                                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date Entrée</th>
-                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Port</th>
-                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type Camion</th>
-                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">État</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Provenance</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">PTAV</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">PTAC</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">PTRA</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Poids Total</th>
                                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Marchandises</th>
                                         ';
                                         break;
@@ -1170,10 +1378,16 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
                                         echo '
                                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Immatriculation</th>
                                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Chauffeur</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Téléphone</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">NIF</th>
                                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date Sortie</th>
                                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type Sortie</th>
-                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Poids Total (kg)</th>
-                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Surcharge</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Destination</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">PTAV</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">PTAC</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">PTRA</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Poids Total</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Marchandises</th>
                                         ';
                                         break;
                                     
@@ -1249,19 +1463,29 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
                                                     ' . safe_html($row['prenom_chauffeur'] . ' ' . $row['nom_chauffeur']) . '
                                                 </td>
                                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                    ' . safe_html($row['telephone_chauffeur'] ?? '') . '
+                                                </td>
+                                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                    ' . safe_html($row['nif_chauffeur'] ?? '') . '
+                                                </td>
+                                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                                     ' . date('d/m/Y H:i', strtotime($row['date_entree'])) . '
                                                 </td>
                                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                                     ' . safe_html($row['port_nom'] ?? '') . '
                                                 </td>
                                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                                    ' . safe_html($row['type_camion'] ?? '') . '
+                                                    ' . number_format($row['ptav'] ?? 0, 2) . ' kg
                                                 </td>
-                                                <td class="px-6 py-4 whitespace-nowrap">
-                                                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ' . 
-                                                    ($row['etat'] == 'Vide' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800') . '">
-                                                        ' . ucfirst(safe_html($row['etat'])) . '
-                                                    </span>
+                                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                    ' . number_format($row['ptac'] ?? 0, 2) . ' kg
+                                                </td>
+                                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                    ' . number_format($row['ptra'] ?? 0, 2) . ' kg
+                                                </td>
+                                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                    <div class="font-medium">' . number_format($row['poids_total_camion'] ?? 0, 2) . ' kg</div>
+                                                    <div class="text-xs text-gray-400">' . number_format(($row['poids_total_camion'] ?? 0) / 1000, 2) . ' t</div>
                                                 </td>
                                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                                     ' . ($row['nb_marchandises'] ?? 0) . '
@@ -1287,6 +1511,12 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
                                                     ' . safe_html($row['prenom_chauffeur'] . ' ' . $row['nom_chauffeur']) . '
                                                 </td>
                                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                    ' . safe_html($row['telephone_chauffeur'] ?? '') . '
+                                                </td>
+                                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                    ' . safe_html($row['nif_chauffeur'] ?? '') . '
+                                                </td>
+                                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                                     ' . date('d/m/Y H:i', strtotime($row['date_sortie'])) . '
                                                 </td>
                                                 <td class="px-6 py-4 whitespace-nowrap">
@@ -1296,18 +1526,23 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
                                                     </span>
                                                 </td>
                                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                                    <div class="font-medium ' . (isset($row['surcharge']) && $row['surcharge'] ? 'text-red-600' : 'text-green-600') . '">
-                                                        ' . number_format($poids_total, 2) . ' kg
-                                                    </div>
-                                                    <div class="text-xs text-gray-400">
-                                                        ' . number_format($poids_total / 1000, 2) . ' t
-                                                    </div>
+                                                    ' . safe_html($row['port_nom'] ?? '') . '
                                                 </td>
-                                                <td class="px-6 py-4 whitespace-nowrap">
-                                                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ' . 
-                                                    (isset($row['surcharge']) && $row['surcharge'] ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800') . '">
-                                                        ' . (isset($row['surcharge']) && $row['surcharge'] ? 'Oui' : 'Non') . '
-                                                    </span>
+                                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                    ' . number_format($row['ptav'] ?? 0, 2) . ' kg
+                                                </td>
+                                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                    ' . number_format($row['ptac'] ?? 0, 2) . ' kg
+                                                </td>
+                                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                    ' . number_format($row['ptra'] ?? 0, 2) . ' kg
+                                                </td>
+                                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                    <div class="font-medium">' . number_format($poids_total, 2) . ' kg</div>
+                                                    <div class="text-xs text-gray-400">' . number_format($poids_total / 1000, 2) . ' t</div>
+                                                </td>
+                                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                    ' . ($row['nb_marchandises'] ?? 0) . '
                                                 </td>
                                             ';
                                             break;

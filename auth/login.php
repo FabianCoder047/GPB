@@ -71,7 +71,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     header("Location: ../dashboards/entree_bateau/index.php");
                     break;
 
-                case 'enregistreurEntreeBateau':
+                case 'enregistreurSortieBateau':
                     header("Location: ../dashboards/sortie_bateau/index.php");
                     break;
 

@@ -268,12 +268,7 @@ try {
                         <span class="text-sm text-gray-600">
                             <?php echo $stats['total']; ?> enregistrement(s)
                         </span>
-                        <?php if (!empty($frais_list)): ?>
-                            <button onclick="exportToExcel()" 
-                                    class="inline-flex items-center px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition duration-200">
-                                <i class="fas fa-file-excel mr-2"></i>Exporter Excel
-                            </button>
-                        <?php endif; ?>
+                        
                     </div>
                 </div>
             </div>
@@ -682,25 +677,7 @@ async function openFraisDetails(id) {
         }
         
         
-        // Fonction pour exporter en Excel
-        function exportToExcel() {
-            // Créer un tableau HTML pour l'export
-            const table = document.querySelector('table');
-            const html = table.outerHTML;
-            
-            // Créer un blob avec les données
-            const blob = new Blob([html], { type: 'application/vnd.ms-excel' });
-            
-            // Créer un lien de téléchargement
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'historique_frais_' + new Date().toISOString().split('T')[0] + '.xls';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-        }
+        
         
         // Fermer la modale avec la touche Échap
         document.addEventListener('keydown', function(event) {

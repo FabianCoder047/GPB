@@ -336,16 +336,7 @@ try {
                             <?php endif; ?>
                         </p>
                     </div>
-                    <div class="mt-2 md:mt-0 flex items-center space-x-2">
-                        <button onclick="exportToPDF()" 
-                                class="px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg text-sm font-medium flex items-center">
-                            <i class="fas fa-file-pdf mr-1"></i>Exporter
-                        </button>
-                        <button onclick="exportToExcel()" 
-                                class="px-3 py-1.5 bg-green-100 hover:bg-green-200 text-green-700 rounded-lg text-sm font-medium flex items-center">
-                            <i class="fas fa-file-excel mr-1"></i>Exporter
-                        </button>
-                    </div>
+                    
                 </div>
             </div>
             

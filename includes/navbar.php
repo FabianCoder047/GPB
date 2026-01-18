@@ -53,10 +53,7 @@ $role = $user['role'] ?? null;
             <?php endif; ?>
 
             <?php if ($role === 'autorite'): ?>
-                <a href="index.php"
-                   class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-100">
-                    🏠 <span>Tableau de bord</span>
-                </a>
+                
                 <a href="rapports.php"
                    class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-100">
                     📄 <span>Rapports</span>
@@ -102,7 +99,12 @@ $role = $user['role'] ?? null;
                     📄 <span>Historiques & Rapports</span>
                 </a>
             <?php endif; ?>
-
+            <?php if ($user): ?>
+                <a href="change_password.php"
+                class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-100">
+                    🔒 <span>Modifier mot de passe</span>
+                </a>
+            <?php endif; ?>
             <!-- Déconnexion -->
             <a href="../../logout.php"
                class="flex items-center gap-2 px-3 py-2 rounded bg-red-100 text-red-600 hover:bg-red-200">

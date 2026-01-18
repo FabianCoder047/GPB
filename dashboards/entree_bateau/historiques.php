@@ -336,16 +336,7 @@ try {
                             <?php endif; ?>
                         </p>
                     </div>
-                    <div class="mt-2 md:mt-0 flex items-center space-x-2">
-                        <button onclick="exportToPDF()" 
-                                class="px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg text-sm font-medium flex items-center">
-                            <i class="fas fa-file-pdf mr-1"></i>Exporter
-                        </button>
-                        <button onclick="exportToExcel()" 
-                                class="px-3 py-1.5 bg-green-100 hover:bg-green-200 text-green-700 rounded-lg text-sm font-medium flex items-center">
-                            <i class="fas fa-file-excel mr-1"></i>Exporter
-                        </button>
-                    </div>
+                    
                 </div>
             </div>
             
@@ -790,37 +781,7 @@ try {
             window.location.href = 'historiques.php';
         }
         
-        // Fonction pour exporter en Excel
-        function exportToExcel() {
-            const table = document.querySelector('table');
-            const rows = table.querySelectorAll('tr');
-            let csv = [];
-            
-            // Parcourir chaque ligne
-            for (let i = 0; i < rows.length; i++) {
-                const row = [], cols = rows[i].querySelectorAll('td, th');
-                
-                for (let j = 0; j < cols.length; j++) {
-                    let text = cols[j].innerText;
-                    text = text.replace(/[\n\r]+|[\s]{2,}/g, ' ').trim();
-                    row.push(`"${text}"`);
-                }
-                csv.push(row.join(","));
-            }
-            
-            // Créer et télécharger le fichier
-            const csvString = csv.join("\n");
-            const blob = new Blob(["\ufeff", csvString], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement("a");
-            
-            if (navigator.msSaveBlob) {
-                navigator.msSaveBlob(blob, "historiques.csv");
-            } else {
-                link.href = URL.createObjectURL(blob);
-                link.download = "historiques_" + new Date().toISOString().split('T')[0] + ".csv";
-                link.click();
-            }
-        }
+        
         
         // Initialiser les dates par défaut (dernier mois)
         document.addEventListener('DOMContentLoaded', function() {
